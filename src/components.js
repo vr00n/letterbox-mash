@@ -249,6 +249,9 @@ export class InteractiveGraphCanvas {
 
     // Fire default selection on active user
     this.onNodeSelected(this.nodes[0], true);
+
+    // Draw one frame immediately so the canvas isn't blank before the rAF loop starts
+    this.draw();
   }
 
   /**
@@ -610,6 +613,102 @@ export function renderActiveProfileCard(node, containerElement) {
 
   // Re-bind Lucide icons
   lucide.createIcons();
+}
+
+/**
+ * Helper: Computes cinephile astrology signs (Sun, Moon, Ascendant) based on ratings vector.
+ * Analyzes which genre the user rates highest to assign their cosmic film alignment.
+ */
+function getAstrologySigns(ratings, category) {
+  const scores = { classics: 0, indie: 0, horror: 0, popcorn: 0 };
+  ratings.forEach((r, idx) => {
+    if (r > 0 && MASTER_MOVIES[idx]) scores[MASTER_MOVIES[idx].category] += r;
+  });
+  const sorted = Object.keys(scores).sort((a, b) => scores[b] - scores[a]);
+
+  const map = {
+    classics: { sun: 'Criterion Sun', moon: 'Restoration Moon', asc: '35mm Ascendant' },
+    indie:    { sun: 'Arthouse Sun',  moon: 'Subtitled Moon',   asc: 'A24 Ascendant' },
+    horror:   { sun: 'Gorehound Sun', moon: 'Spooky Moon',      asc: 'Practical-FX Ascendant' },
+    popcorn:  { sun: 'Blockbuster Sun', moon: 'CGI Moon',       asc: 'IMAX Ascendant' }
+  };
+
+  const primary   = sorted[0] || 'classics';
+  const secondary = sorted[1] || 'indie';
+  const ascCat    = (category === 'real' || !map[category]) ? primary : category;
+
+  return {
+    primary:   map[primary].sun,
+    secondary: map[secondary].moon,
+    ascendant: map[ascCat].asc
+  };
+}
+
+/**
+ * Helper: Returns 3 relatable "Most Likely To..." predictions based on genre pairings.
+ */
+function getRelatablePredictions(userCat, partnerCat) {
+  const key = `${userCat}_${partnerCat}`;
+  const table = {
+    indie_indie: [
+      'Most likely to argue about a Greta Gerwig color palette at 2:00 AM.',
+      'Most likely to buy matching overpriced A24 logo hoodies.',
+      'Most likely to pretend they understood a 3-hour French movie for social clout.'
+    ],
+    indie_horror: [
+      "Most likely to watch a slow-burn horror film and argue if it was 'art' or 'just cheap jump scares'.",
+      'Most likely to hold hands while covering their eyes during the gory parts.',
+      'Most likely to analyze the trauma metaphors in Hereditary instead of sleeping.'
+    ],
+    indie_classics: [
+      'Most likely to spend three hours browsing Criterion Channel releases without actually picking one.',
+      "Most likely to debate if Wes Anderson is a 'commercial sellout' or 'cinematic genius'.",
+      'Most likely to go on a date at a dusty independent film festival.'
+    ],
+    indie_popcorn: [
+      "Most likely to negotiate a compromise: 'I'll watch Avengers if you watch a Korean drama about grief.'",
+      "Most likely to fall asleep during the other's favorite film.",
+      'Most likely to argue over whether everything in Dune is a CGI masterpiece.'
+    ],
+    horror_horror: [
+      'Most likely to plan a romantic date in an active graveyard.',
+      'Most likely to have a practical effects gore bucket in their living room.',
+      'Most likely to debate which Scream sequel is the most intellectually rigorous.'
+    ],
+    horror_classics: [
+      "Most likely to debate if Hitchcock's Psycho is the ultimate classic or the ultimate slasher.",
+      'Most likely to force the other to watch VHS-grain horror releases.',
+      'Most likely to write a 1,000-word essay on camera angles in Italian horror.'
+    ],
+    horror_popcorn: [
+      'Most likely to throw their popcorn bucket into the air during a jump scare.',
+      'Most likely to debate who would win: Alien Xenomorph vs. John Wick.',
+      'Most likely to fall asleep during a slow documentary and wake up during a gory slasher.'
+    ],
+    classics_classics: [
+      'Most likely to start a fistfight over whether Citizen Kane is actually the greatest film ever made.',
+      'Most likely to lecture cinema staff about the beauty of 35mm projection.',
+      'Most likely to watch a silent black-and-white masterpiece on a Friday night without subtitles.'
+    ],
+    classics_popcorn: [
+      "Most likely to argue over whether Scorsese's 'Marvel is not cinema' is a sacred text.",
+      "Most likely to debate if The Dark Knight is a 'gritty crime thriller' or 'just a superhero flick'.",
+      'Most likely to spend an entire movie explaining why the lenses in Casablanca were superior.'
+    ],
+    popcorn_popcorn: [
+      'Most likely to buy tickets for IMAX opening night at 12:01 AM.',
+      'Most likely to recite the entire script of Interstellar from memory during dinner.',
+      'Most likely to get into a heated debate about the logistics of time travel in Inception.'
+    ]
+  };
+
+  return table[key]
+    || table[`${partnerCat}_${userCat}`]
+    || [
+      'Most likely to rent out an entire theater and argue about the volume levels.',
+      'Most likely to buy overpriced concession snacks and complain about the popcorn seasoning.',
+      'Most likely to spend 45 minutes reading Letterboxd reviews instead of watching the actual movie.'
+    ];
 }
 
 /**
