@@ -21,11 +21,42 @@ const STATE = {
   avatar: 'U',
   ratings: new Array(60).fill(0), // 60 elements for M=60
   archetypes: [...ARCHETYPES],
+  scannedProfiles: [], // Real friends scanned in this session or history
   knnMatches: [],
   selectedNode: null,
   graphCanvas: null,
   animationFrameId: null
 };
+
+// Load scanned profiles from localStorage
+try {
+  const saved = localStorage.getItem('letterboxd_knn_scanned');
+  if (saved) {
+    STATE.scannedProfiles = JSON.parse(saved);
+  }
+} catch (e) {
+  STATE.scannedProfiles = [];
+}
+
+// Helper: Gets a category name from ratings vector
+function getPrimaryGenreName(ratings) {
+  const scores = { classics: 0, indie: 0, horror: 0, popcorn: 0 };
+  MASTER_MOVIES.forEach((m, idx) => {
+    if (ratings[idx] > 0) scores[m.category] += ratings[idx];
+  });
+  let maxCat = 'classics';
+  let maxScore = -1;
+  Object.keys(scores).forEach(cat => {
+    if (scores[cat] > maxScore) {
+      maxScore = scores[cat];
+      maxCat = cat;
+    }
+  });
+  if (maxCat === 'indie') return 'indie';
+  if (maxCat === 'horror') return 'horror';
+  if (maxCat === 'popcorn') return 'popcorn';
+  return 'classics';
+}
 
 // DOM Cache
 const DOM = {
@@ -176,43 +207,103 @@ function startCanvasLoop() {
  * Triggers full vector computations: Pearson, Cosine, PCA coordinates.
  */
 function computeTasteSpace() {
-  // 1. Gather all vectors for PCA projection
-  // Matrix dimensions: [N=25, M=60] (24 archetypes + 1 user)
-  const fullMatrix = STATE.archetypes.map(a => a.ratings);
-  fullMatrix.push(STATE.ratings); // Insert user vector at the end (index N-1)
-
-  // 2. Perform Singular Value / Power Iteration PCA
-  const projections = performPCA(fullMatrix);
-  const userProjection = projections[projections.length - 1]; // user is last element
-
-  // 3. Compute KNN Matches against archetypes
-  const knnMatches = getKNNNeighbors(STATE.ratings, STATE.archetypes, 10);
-  STATE.knnMatches = knnMatches;
-
-  // 4. Bind PCA coordinates to archetypes & user
-  STATE.archetypes.forEach((a, idx) => {
-    a.pc1 = projections[idx].pc1;
-    a.pc2 = projections[idx].pc2;
-  });
-
-  const userProfile = {
+  // Save the current user to their history/scanned network
+  const existingIdx = STATE.scannedProfiles.findIndex(p => p.username.toLowerCase() === STATE.username.toLowerCase());
+  const primaryGenre = getPrimaryGenreName(STATE.ratings);
+  const profileData = {
+    id: `real_${STATE.username.toLowerCase()}`,
     username: STATE.username,
     displayName: STATE.displayName,
     avatar: STATE.avatar,
-    ratings: STATE.ratings,
-    category: 'user',
-    pc1: userProjection.pc1,
-    pc2: userProjection.pc2
+    ratings: [...STATE.ratings],
+    category: 'real',
+    bio: `A real moviegoer scanned on this device. Taste affinity is primarily ${primaryGenre}.`
   };
 
-  // 5. Build and launch Canvas graph
+  if (existingIdx !== -1) {
+    STATE.scannedProfiles[existingIdx] = profileData;
+  } else {
+    STATE.scannedProfiles.push(profileData);
+  }
+
+  try {
+    localStorage.setItem('letterboxd_knn_scanned', JSON.stringify(STATE.scannedProfiles));
+  } catch (e) {}
+
+  // 1. Get other real scanned profiles (excluding active user)
+  const otherRealProfiles = STATE.scannedProfiles.filter(p => p.username.toLowerCase() !== STATE.username.toLowerCase());
+
+  // 2. Select preconfigured archetypes (Outsiders)
+  // We prioritize real friends, and fill the rest up to 10 nodes using preloaded archetypes.
+  let comparisonPool = [...otherRealProfiles];
+  
+  if (comparisonPool.length < 10) {
+    // Pad pool with simulated archetypes so there are at least 10 matches in total
+    comparisonPool = [...comparisonPool, ...STATE.archetypes];
+  }
+
+  // 3. Combine all active profiles into a single list for PCA coordinates
+  const allProfilesForPCA = [
+    ...STATE.scannedProfiles.filter(p => p.username.toLowerCase() !== STATE.username.toLowerCase()),
+    ...STATE.archetypes
+  ];
+  
+  const userProfile = {
+    id: `real_${STATE.username.toLowerCase()}`,
+    username: STATE.username,
+    displayName: STATE.displayName,
+    avatar: STATE.avatar,
+    ratings: [...STATE.ratings],
+    category: 'real',
+    bio: `A real moviegoer scanned on this device.`
+  };
+  allProfilesForPCA.push(userProfile);
+
+  const fullMatrix = allProfilesForPCA.map(p => p.ratings);
+
+  // 4. Perform Singular Value / Power Iteration PCA
+  const projections = performPCA(fullMatrix);
+  const userProjection = projections[projections.length - 1]; // user is last
+
+  // Map coordinates back
+  allProfilesForPCA.forEach((p, idx) => {
+    p.pc1 = projections[idx].pc1;
+    p.pc2 = projections[idx].pc2;
+  });
+
+  // Keep state copies updated
+  STATE.archetypes.forEach(arc => {
+    const updated = allProfilesForPCA.find(p => p.id === arc.id);
+    if (updated) {
+      arc.pc1 = updated.pc1;
+      arc.pc2 = updated.pc2;
+    }
+  });
+
+  otherRealProfiles.forEach(friend => {
+    const updated = allProfilesForPCA.find(p => p.id === friend.id);
+    if (updated) {
+      friend.pc1 = updated.pc1;
+      friend.pc2 = updated.pc2;
+    }
+  });
+
+  // 5. Compute KNN Matches against the combined comparison pool
+  // The search automatically prioritizes friends because they are in the pool!
+  const knnMatches = getKNNNeighbors(STATE.ratings, comparisonPool, 10);
+  STATE.knnMatches = knnMatches;
+
+  userProfile.pc1 = userProjection.pc1;
+  userProfile.pc2 = userProjection.pc2;
+
+  // 6. Build and launch Canvas graph
   if (!STATE.graphCanvas) {
     STATE.graphCanvas = new InteractiveGraphCanvas(DOM.canvas, handleNodeSelected);
   }
 
   STATE.graphCanvas.setGraph(userProfile, knnMatches);
   
-  // 6. Push user coordinates to labels
+  // 7. Push user coordinates to labels
   DOM.statPC1.innerText = userProjection.pc1.toFixed(2);
   DOM.statPC2.innerText = userProjection.pc2.toFixed(2);
 
@@ -232,10 +323,10 @@ function handleNodeSelected(node, isUser) {
 
   if (isUser) {
     // Reset stats nerd panel for central user
-    DOM.statPearson.innerText = '1.00';
-    DOM.statCosine.innerText = '1.00';
-    DOM.statJaccard.innerText = '1.00';
-    DOM.statDistance.innerText = '0.00';
+    DOM.statPearson.innerText = '1.00 (Self)';
+    DOM.statCosine.innerText = '1.00 (Self)';
+    DOM.statJaccard.innerText = '1.00 (Self)';
+    DOM.statDistance.innerText = '0.00 (Self)';
 
     DOM.barPearson.style.width = '100%';
     DOM.barCosine.style.width = '100%';
@@ -247,10 +338,33 @@ function handleNodeSelected(node, isUser) {
   } else {
     // Populate neighbors metrics
     const stats = node.stats;
-    DOM.statPearson.innerText = stats.pearson.toFixed(2);
-    DOM.statCosine.innerText = stats.cosine.toFixed(2);
-    DOM.statJaccard.innerText = stats.jaccard.toFixed(2);
-    DOM.statDistance.innerText = stats.distance.toFixed(1);
+    
+    // Astro relatable interpretations
+    let pearsonLabel = 'Celestial Friction';
+    if (stats.pearson > 0.8) pearsonLabel = 'Soul Alignment';
+    else if (stats.pearson > 0.55) pearsonLabel = 'High Harmony';
+    else if (stats.pearson > 0.25) pearsonLabel = 'Parallel Orbits';
+    else if (stats.pearson > -0.2) pearsonLabel = 'Neutral Synergy';
+    
+    let cosineLabel = 'Wandering Stars';
+    if (stats.cosine > 0.8) cosineLabel = 'Cosmic Telepathy';
+    else if (stats.cosine > 0.55) cosineLabel = 'Good Synastry';
+    else if (stats.cosine > 0.2) cosineLabel = 'Weak Aura Overlap';
+    
+    let jaccardLabel = 'Alien Ecosystems';
+    if (stats.jaccard > 0.35) jaccardLabel = 'Telepathic Link';
+    else if (stats.jaccard > 0.18) jaccardLabel = 'Shared Footprint';
+    else if (stats.jaccard > 0.08) jaccardLabel = 'Faint Intersection';
+    
+    let distanceLabel = 'Lightyears Apart';
+    if (stats.distance < 4.0) distanceLabel = 'Identical Dimensions';
+    else if (stats.distance < 6.5) distanceLabel = 'Co-Existing Orbits';
+    else if (stats.distance < 8.5) distanceLabel = 'Distant Galaxies';
+
+    DOM.statPearson.innerText = `${stats.pearson.toFixed(2)} (${pearsonLabel})`;
+    DOM.statCosine.innerText = `${stats.cosine.toFixed(2)} (${cosineLabel})`;
+    DOM.statJaccard.innerText = `${stats.jaccard.toFixed(2)} (${jaccardLabel})`;
+    DOM.statDistance.innerText = `${stats.distance.toFixed(1)} (${distanceLabel})`;
 
     // Update graphical progress tracks (centered from 0-1 or 0-10 scale)
     DOM.barPearson.style.width = `${Math.max(0, Math.min(100, ((stats.pearson + 1) / 2) * 100))}%`;
@@ -419,7 +533,8 @@ function initEvents() {
 
     // Category style taglines
     let tag = 'フランス映画学者';
-    if (partner.category === 'indie') tag = 'Indie / Arthouse Fanatic';
+    if (partner.category === 'real') tag = '👥 Real Scanned Friend';
+    else if (partner.category === 'indie') tag = 'Indie / Arthouse Fanatic';
     else if (partner.category === 'horror') tag = 'Spooky Elevated Horror';
     else if (partner.category === 'popcorn') tag = 'Max Sci-Fi / Action';
     document.getElementById('mashup-partner-tag').innerText = tag;

@@ -202,11 +202,17 @@ export class InteractiveGraphCanvas {
       const px = width / 2 + Math.cos(angle) * distance;
       const py = height / 2 + Math.sin(angle) * distance;
 
+      const isFriend = match.profile.category === 'real';
       let color = '#00e054'; // default green
       let glow = 'rgba(0, 224, 84, 0.3)';
-      if (match.profile.category === 'horror') { color = '#ef233c'; glow = 'rgba(239, 35, 60, 0.3)'; }
-      else if (match.profile.category === 'classics') { color = '#ff8000'; glow = 'rgba(255, 128, 0, 0.3)'; }
-      else if (match.profile.category === 'popcorn') { color = '#40bcf4'; glow = 'rgba(64, 188, 244, 0.3)'; }
+      if (isFriend) {
+        color = '#40bcf4'; // glowing teal/blue for friends
+        glow = 'rgba(64, 188, 244, 0.5)';
+      } else {
+        if (match.profile.category === 'horror') { color = '#ef233c'; glow = 'rgba(239, 35, 60, 0.3)'; }
+        else if (match.profile.category === 'classics') { color = '#ff8000'; glow = 'rgba(255, 128, 0, 0.3)'; }
+        else if (match.profile.category === 'popcorn') { color = '#a06cd5'; glow = 'rgba(160, 108, 213, 0.3)'; } // Purple popcorn
+      }
 
       const node = {
         id: match.profile.id,
@@ -462,6 +468,18 @@ export class InteractiveGraphCanvas {
       this.ctx.fillStyle = node.color;
       this.ctx.fill();
 
+      // Custom dashed halo for real scanned friends in the graph
+      if (node.profile.category === 'real' && !node.isCentral) {
+        this.ctx.save();
+        this.ctx.strokeStyle = '#40bcf4';
+        this.ctx.lineWidth = 1.5;
+        this.ctx.setLineDash([4, 3]);
+        this.ctx.beginPath();
+        this.ctx.arc(node.x, node.y, node.radius + 5, 0, Math.PI * 2);
+        this.ctx.stroke();
+        this.ctx.restore();
+      }
+
       if (isHovered || isActive) {
         this.ctx.restore();
       }
@@ -492,7 +510,7 @@ export class InteractiveGraphCanvas {
       this.ctx.textAlign = 'center';
       this.ctx.textBaseline = 'top';
 
-      const tagText = node.label;
+      const tagText = node.profile.category === 'real' && !node.isCentral ? `👥 ${node.label}` : node.label;
       const textWidth = this.ctx.measureText(tagText).width;
 
       // Draw glass label container below node
@@ -550,14 +568,17 @@ export function renderActiveProfileCard(node, containerElement) {
 
   // Determine accent classes
   let typeLabel = 'Classic Cinephile';
-  let badgeColorClass = 'popcorn';
-  if (p.category === 'indie') { typeLabel = 'Arthouse & Indie Devotee'; badgeColorClass = 'accent-green'; }
-  else if (p.category === 'horror') { typeLabel = 'Horror Gorehound'; badgeColorClass = 'accent-orange'; }
-  else if (p.category === 'popcorn') { typeLabel = 'Sci-Fi / Popcorn Maximalist'; badgeColorClass = 'accent-blue'; }
+  if (p.category === 'real') {
+    typeLabel = '👥 Real Connection (Friend)';
+  } else {
+    if (p.category === 'indie') typeLabel = 'Arthouse & Indie Devotee';
+    else if (p.category === 'horror') typeLabel = 'Horror Gorehound';
+    else if (p.category === 'popcorn') typeLabel = 'Sci-Fi / Popcorn Maximalist';
+  }
 
   containerElement.innerHTML = `
     <div class="profile-header-meta">
-      <div class="profile-avatar" style="background: ${isUser ? '#ffffff' : 'var(--accent-green)'}; color: #000;">
+      <div class="profile-avatar" style="background: ${isUser ? '#ffffff' : node.color}; color: #000;">
         ${p.avatar || p.username.substring(0,2).toUpperCase()}
       </div>
       <div class="profile-name-group">
@@ -659,7 +680,6 @@ export function renderMashupDNA(userVector, partnerProfile, containerElement) {
   watchlistRecs.sort((a, b) => b.rating - a.rating);
 
   // Normalize genre vectors to a 0-100% scale for easy visualization
-  const genreMax = 15 * 5.0; // 15 movies * 5 stars
   const genreBars = Object.keys(genres).map(key => {
     const data = genres[key];
     const uPercent = Math.round((data.user / (data.count * 5 || 1)) * 100);
@@ -677,6 +697,76 @@ export function renderMashupDNA(userVector, partnerProfile, containerElement) {
       partnerPercent: pPercent
     };
   });
+
+  // Calculate astrology profiles
+  const userAstro = getAstrologySigns(userVector, 'real');
+  const partnerAstro = getAstrologySigns(partnerVector, partnerProfile.category);
+  
+  // Extract primary categories for relatable predictions
+  const userPrimaryCategory = userVector.reduce((acc, r, i) => r > acc.val ? { val: r, cat: MASTER_MOVIES[i].category } : acc, { val: -1, cat: 'classics' }).cat;
+  const partnerPrimaryCategory = partnerProfile.category === 'real'
+    ? partnerVector.reduce((acc, r, i) => r > acc.val ? { val: r, cat: MASTER_MOVIES[i].category } : acc, { val: -1, cat: 'classics' }).cat
+    : partnerProfile.category;
+
+  const astroPredictions = getRelatablePredictions(userPrimaryCategory, partnerPrimaryCategory);
+
+  // Inject Astrology Synastry Card dynamically in DOM before the grids
+  const modalBody = containerElement.querySelector('.modal-body');
+  let astroCard = modalBody.querySelector('.astrology-compatibility-card');
+  if (!astroCard) {
+    astroCard = document.createElement('div');
+    astroCard.className = 'glass-card astrology-compatibility-card';
+    astroCard.style.cssText = 'padding: 24px; background: rgba(155, 93, 229, 0.05); border-color: rgba(155, 93, 229, 0.25); display: flex; flex-direction: column; gap: 16px; margin-bottom: 20px;';
+    
+    // Insert after profiles header
+    const profilesHeader = modalBody.querySelector('.mashup-profiles-header');
+    profilesHeader.after(astroCard);
+  }
+
+  // Render Astrology Card contents
+  astroCard.innerHTML = `
+    <div style="display: flex; align-items: center; gap: 10px; border-bottom: 1px solid rgba(155, 93, 229, 0.15); padding-bottom: 10px;">
+      <i data-lucide="sparkles" style="color: var(--accent-purple); width: 20px; height: 20px;"></i>
+      <h3 style="font-family: 'Space Grotesk', sans-serif; font-size: 1.1rem; color: #fff; font-weight: 700; letter-spacing: 0.5px;">CINEPHILE SYNASTRY & HOROSCOPE</h3>
+    </div>
+    
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+      <div>
+        <h4 style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700; margin-bottom: 6px; letter-spacing: 0.5px;">Your Cosmic Signs</h4>
+        <p style="font-size: 0.85rem; color: #fff; font-weight: 600; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+          <span>☀️ <strong style="color: #ffffff;">${userAstro.primary}</strong></span>
+          <span>🌙 <strong style="color: var(--accent-blue);">${userAstro.secondary}</strong></span>
+          <span>✨ <strong style="color: var(--accent-green);">${userAstro.ascendant}</strong></span>
+        </p>
+      </div>
+      <div>
+        <h4 style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700; margin-bottom: 6px; letter-spacing: 0.5px;">Their Cosmic Signs</h4>
+        <p style="font-size: 0.85rem; color: #fff; font-weight: 600; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+          <span>☀️ <strong style="color: #ffffff;">${partnerAstro.primary}</strong></span>
+          <span>🌙 <strong style="color: var(--accent-blue);">${partnerAstro.secondary}</strong></span>
+          <span>✨ <strong style="color: var(--accent-green);">${partnerAstro.ascendant}</strong></span>
+        </p>
+      </div>
+    </div>
+
+    <div style="background: rgba(0,0,0,0.15); border-radius: 8px; padding: 14px; border: 1px solid rgba(255,255,255,0.02);">
+      <h4 style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700; margin-bottom: 8px; letter-spacing: 0.5px;">COSMIC TASTE PREDICTIONS ("MOST LIKELY TO...")</h4>
+      <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 0.82rem; color: var(--text-secondary); padding: 0; margin: 0;">
+        ${astroPredictions.map(p => `<li style="display: flex; gap: 8px; align-items: flex-start; text-align: left;"><span style="color: var(--accent-purple);">✦</span><span>${p}</span></li>`).join('')}
+      </ul>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: center; border-top: 1px solid rgba(255,255,255,0.03); padding-top: 14px;">
+      <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 0; line-height: 1.4; text-align: left;">
+        ⚠️ <strong style="color: #ff5f56; text-transform: uppercase; letter-spacing: 0.5px;">Danger Zone:</strong> You will start a fistfight over 
+        <strong style="color: #ffffff;">"${gaps.length > 0 ? gaps[0].movie.title : 'movie ratings'}"</strong>.
+      </p>
+      <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 0; text-align: right; line-height: 1.4;">
+        🎬 <strong style="color: var(--accent-green); text-transform: uppercase; letter-spacing: 0.5px;">Cosmic Date:</strong> Rent a vintage projector and watch 
+        <strong style="color: #ffffff;">"${sharedFavorites.length > 0 ? sharedFavorites[0].movie.title : 'a classic masterpiece'}"</strong>.
+      </p>
+    </div>
+  `;
 
   // Populate Shared Favorites
   const sharedContainer = containerElement.querySelector('#mashup-shared-favorites');
