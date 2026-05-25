@@ -3,8 +3,8 @@
    Project: Letterboxd KNN Taste Mashup
    ========================================================================== */
 
-import { ARCHETYPES, MASTER_MOVIES, generateDeterministicRatings } from './archetypes.js';
-import { performPCA, getKNNNeighbors, getAdjustedCosineSimilarity, getPearsonCorrelation, getJaccardSimilarity } from './math.js';
+import { ARCHETYPES, MASTER_MOVIES, TASTE_ATTRIBUTES, generateDeterministicRatings } from './archetypes.js';
+import { performPCA, getKNNNeighbors, getAdjustedCosineSimilarity, getPearsonCorrelation, getJaccardSimilarity, computeAttributeAffinities } from './math.js';
 import { 
   renderTerminalLogs, 
   renderCalibrationCards,
@@ -22,6 +22,7 @@ const STATE = {
   displayName: '',
   avatar: 'U',
   ratings: new Array(60).fill(0),
+  rssFilms: [],           // full film list from RSS (not limited to 60-catalog)
   archetypes: [...ARCHETYPES],
   scannedProfiles: [],
   knnMatches: [],
@@ -99,17 +100,9 @@ const DOM = {
   closeModalBtn: document.getElementById('close-modal-btn'),
   mashupModal: document.getElementById('mashup-modal'),
 
-  // Stats Nerd labels
-  statPearson: document.getElementById('stat-pearson'),
-  statCosine: document.getElementById('stat-cosine'),
-  statJaccard: document.getElementById('stat-jaccard'),
-  statDistance: document.getElementById('stat-distance'),
+  // PCA labels (kept for reference, may be null if section removed)
   statPC1: document.getElementById('stat-pc1'),
-  statPC2: document.getElementById('stat-pc2'),
-  barPearson: document.getElementById('bar-pearson'),
-  barCosine: document.getElementById('bar-cosine'),
-  barJaccard: document.getElementById('bar-jaccard'),
-  barDistance: document.getElementById('bar-distance')
+  statPC2: document.getElementById('stat-pc2')
 };
 
 /**
@@ -297,15 +290,22 @@ function computeTasteSpace() {
   // 6. Transition to dashboard
   transitionTo('screen-dashboard');
 
-  // 7. Push PCA labels
-  DOM.statPC1.innerText = userProjection.pc1.toFixed(2);
-  DOM.statPC2.innerText = userProjection.pc2.toFixed(2);
-
-  // 8. Render the compatibility table
+  // 7. Render the compatibility table and auto-select first row
   renderCompatibilityTable(STATE.ratings, allMatches, DOM.compatTableContainer, handleRowSelected);
 
-  // 9. Show self profile card by default
-  renderActiveProfileCard({ profile: userProfile, stats: null }, DOM.selectedProfileCard);
+  // 9. Auto-select top match so radar + mashup button are ready immediately
+  if (allMatches.length > 0) {
+    const userAff = computeAttributeAffinities(STATE.ratings, TASTE_ATTRIBUTES);
+    const friendAff = computeAttributeAffinities(allMatches[0].profile.ratings, TASTE_ATTRIBUTES);
+    handleRowSelected(allMatches[0], userAff, friendAff);
+    // Mark the first row active visually
+    requestAnimationFrame(() => {
+      const firstRow = DOM.compatTableContainer.querySelector('.compat-row');
+      if (firstRow) firstRow.classList.add('compat-row-active');
+    });
+  } else {
+    renderActiveProfileCard({ profile: userProfile, stats: null }, DOM.selectedProfileCard);
+  }
 
   // Show real vs. simulated data badge
   const badge = document.getElementById('data-source-badge');
@@ -344,40 +344,6 @@ function handleRowSelected(match, userAffinities, friendAffinities) {
   DOM.radarLabelFriend.innerText = match.profile.username;
   DOM.radarDotFriend.style.background = friendColor;
   requestAnimationFrame(() => renderRadarChart(DOM.radarCanvas, userAffinities, friendAffinities, friendColor));
-
-  // Maths stats
-  const stats = match.stats;
-
-  let pearsonLabel = 'Celestial Friction';
-  if (stats.pearson > 0.8) pearsonLabel = 'Soul Alignment';
-  else if (stats.pearson > 0.55) pearsonLabel = 'High Harmony';
-  else if (stats.pearson > 0.25) pearsonLabel = 'Parallel Orbits';
-  else if (stats.pearson > -0.2) pearsonLabel = 'Neutral Synergy';
-
-  let cosineLabel = 'Wandering Stars';
-  if (stats.cosine > 0.8) cosineLabel = 'Cosmic Telepathy';
-  else if (stats.cosine > 0.55) cosineLabel = 'Good Synastry';
-  else if (stats.cosine > 0.2) cosineLabel = 'Weak Aura Overlap';
-
-  let jaccardLabel = 'Alien Ecosystems';
-  if (stats.jaccard > 0.35) jaccardLabel = 'Telepathic Link';
-  else if (stats.jaccard > 0.18) jaccardLabel = 'Shared Footprint';
-  else if (stats.jaccard > 0.08) jaccardLabel = 'Faint Intersection';
-
-  let distanceLabel = 'Lightyears Apart';
-  if (stats.distance < 4.0) distanceLabel = 'Identical Dimensions';
-  else if (stats.distance < 6.5) distanceLabel = 'Co-Existing Orbits';
-  else if (stats.distance < 8.5) distanceLabel = 'Distant Galaxies';
-
-  DOM.statPearson.innerText = `${stats.pearson.toFixed(2)} (${pearsonLabel})`;
-  DOM.statCosine.innerText = `${stats.cosine.toFixed(2)} (${cosineLabel})`;
-  DOM.statJaccard.innerText = `${stats.jaccard.toFixed(2)} (${jaccardLabel})`;
-  DOM.statDistance.innerText = `${stats.distance.toFixed(1)} (${distanceLabel})`;
-
-  DOM.barPearson.style.width = `${Math.max(0, Math.min(100, ((stats.pearson + 1) / 2) * 100))}%`;
-  DOM.barCosine.style.width = `${Math.max(0, Math.min(100, ((stats.cosine + 1) / 2) * 100))}%`;
-  DOM.barJaccard.style.width = `${stats.jaccard * 100}%`;
-  DOM.barDistance.style.width = `${Math.max(0, Math.min(100, (stats.distance / 10) * 100))}%`;
 
   DOM.openMashupBtn.classList.remove('disabled');
 }
@@ -442,12 +408,16 @@ function initDropZone() {
 }
 
 /**
- * Parses a Letterboxd RSS XML string and maps rated films to MASTER_MOVIES catalog.
- * Handles both raw text and CDATA-wrapped title fields.
+ * Parses a Letterboxd RSS XML string.
+ * Returns:
+ *  - ratings: sparse 60-vector for KNN (catalog matches only)
+ *  - matchCount: how many catalog films were matched
+ *  - films: full array of ALL rated films from RSS {title, year, rating, watched}
  */
 function parseRSSXML(xmlText) {
   const ratings = new Array(60).fill(0);
   let matchCount = 0;
+  const films = [];
 
   const itemRegex = /<item>([\s\S]*?)<\/item>/g;
   let itemMatch;
@@ -455,29 +425,32 @@ function parseRSSXML(xmlText) {
   while ((itemMatch = itemRegex.exec(xmlText)) !== null) {
     const itemXml = itemMatch[1];
 
-    const titleMatch = itemXml.match(/<letterboxd:filmTitle>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/letterboxd:filmTitle>/);
-    const yearMatch  = itemXml.match(/<letterboxd:filmYear>(\d+)<\/letterboxd:filmYear>/);
+    const titleMatch  = itemXml.match(/<letterboxd:filmTitle>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/letterboxd:filmTitle>/);
+    const yearMatch   = itemXml.match(/<letterboxd:filmYear>(\d+)<\/letterboxd:filmYear>/);
     const ratingMatch = itemXml.match(/<letterboxd:memberRating>([\d.]+)<\/letterboxd:memberRating>/);
+    const watchedMatch = itemXml.match(/<letterboxd:watchedDate>(\d{4}-\d{2}-\d{2})<\/letterboxd:watchedDate>/);
 
     if (!titleMatch || !ratingMatch) continue;
 
     const title  = titleMatch[1].trim();
     const year   = yearMatch ? parseInt(yearMatch[1]) : null;
     const rating = parseFloat(ratingMatch[1]);
+    const watched = watchedMatch ? watchedMatch[1] : null;
 
     if (!title || isNaN(rating)) continue;
+
+    films.push({ title, year, rating, watched });
 
     const film = MASTER_MOVIES.find(m =>
       m.title.toLowerCase() === title.toLowerCase() && (!year || m.year === year)
     );
-
     if (film && ratings[film.id] === 0) {
       ratings[film.id] = rating;
       matchCount++;
     }
   }
 
-  return { ratings, matchCount };
+  return { ratings, matchCount, films };
 }
 
 /**
@@ -502,21 +475,13 @@ async function fetchLetterboxdRSS(username) {
       if (!text || !text.includes('<letterboxd:filmTitle>')) continue;
 
       const result = parseRSSXML(text);
-      if (result.matchCount > 0) return result;
+      if (result.films.length > 0) return result; // return if any films found, not just catalog matches
     } catch (_) {
       // try next proxy
     }
   }
 
   return null;
-}
-
-/**
- * Merges real RSS ratings on top of a deterministic fallback vector.
- * Real ratings win; deterministic fills unrated films.
- */
-function blendRatings(deterministicRatings, realRatings) {
-  return deterministicRatings.map((det, i) => realRatings[i] > 0 ? realRatings[i] : det);
 }
 
 /**
@@ -578,20 +543,17 @@ async function fetchFriendProfiles(usernames, maxFriends = 12) {
       if (!text || !text.includes('<letterboxd:filmTitle>')) return null;
 
       const rss = parseRSSXML(text);
-      // Friends with 0 catalog matches still appear in the graph with deterministic vector
-      const baseRatings = generateDeterministicRatings(uname);
-      const ratings = rss.matchCount > 0 ? blendRatings(baseRatings, rss.ratings) : baseRatings;
+      if (rss.films.length === 0) return null; // skip friends with no readable ratings
 
       return {
         id: `real_${uname}`,
         username: uname,
         displayName: uname,
         avatar: uname.substring(0, 2).toUpperCase(),
-        ratings,
+        ratings: rss.ratings, // sparse — real catalog matches only, no faking
+        rssFilms: rss.films,
         category: 'real',
-        bio: rss.matchCount > 0
-          ? `Your Letterboxd friend. ${rss.matchCount} catalog film${rss.matchCount !== 1 ? 's' : ''} matched from their RSS.`
-          : `Your Letterboxd friend (taste vector estimated — no catalog overlaps yet).`
+        bio: `Your Letterboxd friend. ${rss.films.length} rated films fetched (${rss.matchCount} catalog match${rss.matchCount !== 1 ? 'es' : ''}).`
       };
     } catch (_) {
       return null;
@@ -614,7 +576,8 @@ function initEvents() {
     STATE.username = rawVal;
     STATE.displayName = rawVal;
     STATE.avatar = rawVal.substring(0, 2).toUpperCase();
-    STATE.ratings = generateDeterministicRatings(rawVal); // deterministic fallback
+    STATE.ratings = new Array(60).fill(0); // always start empty — real data only
+    STATE.rssFilms = [];
     STATE.hasRealData = false;
     STATE.realDataMatchCount = 0;
 
@@ -641,18 +604,19 @@ function initEvents() {
       const [rssResult, friendProfiles] = await Promise.all([rssFetchPromise, friendProfilesPromise]);
       waitLine.remove();
 
-      // --- Own ratings ---
+      // --- Own ratings (real data only, no faking) ---
       const ownLine = document.createElement('p');
       ownLine.className = 'terminal-line terminal-text';
-      if (rssResult && rssResult.matchCount >= 1) {
-        STATE.ratings = blendRatings(STATE.ratings, rssResult.ratings);
-        STATE.hasRealData = true;
+      if (rssResult && rssResult.films.length > 0) {
+        STATE.ratings = rssResult.ratings; // sparse — only real catalog matches
+        STATE.rssFilms = rssResult.films;
+        STATE.hasRealData = rssResult.matchCount > 0;
         STATE.realDataMatchCount = rssResult.matchCount;
         ownLine.classList.add('terminal-accent');
-        ownLine.innerHTML = `> [LIVE] ✓ Your ratings: ${rssResult.matchCount} real catalog match${rssResult.matchCount > 1 ? 'es' : ''} loaded from RSS.`;
+        ownLine.innerHTML = `> [LIVE] ✓ Fetched ${rssResult.films.length} rated films from RSS (${rssResult.matchCount} catalog match${rssResult.matchCount !== 1 ? 'es' : ''}).`;
       } else {
         ownLine.style.color = 'var(--accent-orange)';
-        ownLine.innerHTML = '> [SIM] Your profile: no catalog RSS matches — using estimated taste vector.';
+        ownLine.innerHTML = `> [ERR] Could not fetch RSS data for "${rawVal}". Check the username — or Letterboxd may be rate-limiting.`;
       }
       body.appendChild(ownLine);
 
@@ -730,21 +694,9 @@ function initEvents() {
     transitionTo('screen-scan');
   });
 
-  // --- MATH STATS TOGGLE ---
-  const mathStatsToggle = document.getElementById('math-stats-toggle');
-  const mathStatsBody = document.getElementById('math-stats-body');
-  const mathStatsChevron = document.getElementById('math-stats-chevron');
-  if (mathStatsToggle) {
-    mathStatsToggle.addEventListener('click', () => {
-      const isHidden = mathStatsBody.style.display === 'none';
-      mathStatsBody.style.display = isHidden ? '' : 'none';
-      if (mathStatsChevron) mathStatsChevron.style.transform = isHidden ? '' : 'rotate(-90deg)';
-    });
-  }
-
-  // --- DEEP PROFILE ---
+  // --- DEEP PROFILE (from dashboard) ---
   DOM.deepProfileBtn.addEventListener('click', () => {
-    renderDeepProfile(STATE.ratings, STATE.username, STATE.knnMatches, DOM.deepProfileBody);
+    renderDeepProfile(STATE.ratings, STATE.username, STATE.knnMatches, DOM.deepProfileBody, STATE.rssFilms);
     DOM.deepProfileModal.classList.add('active');
     DOM.deepProfileModal.style.display = 'flex';
     lucide.createIcons();
@@ -766,9 +718,9 @@ function initEvents() {
     const partner = STATE.selectedMatch.profile;
     const matchPercent = STATE.selectedMatch.stats.matchPercent;
 
-    // Set modal top header details
-    document.getElementById('mashup-partner-name').innerText = partner.displayName;
-    document.getElementById('mashup-partner-avatar').innerText = partner.avatar || partner.username.substring(0,2).toUpperCase();
+    document.getElementById('mashup-partner-name').innerText = partner.displayName || partner.username;
+    document.getElementById('mashup-partner-avatar').innerText = (partner.avatar || partner.username.substring(0, 2)).toUpperCase();
+    document.getElementById('mashup-user-avatar').innerText = STATE.avatar || STATE.username.substring(0, 2).toUpperCase();
     document.getElementById('mashup-user-name').innerText = STATE.username;
     document.getElementById('mashup-match-percent').innerText = `${matchPercent}%`;
 
@@ -807,26 +759,55 @@ function initEvents() {
     }
   });
 
-  // --- TAB SWITCHER (Find Neighbors / Compare Two Profiles) ---
+  // --- TAB SWITCHER (Find Neighbors / Compare / Deep Profile) ---
   const tabFind = document.getElementById('tab-find');
   const tabCompare = document.getElementById('tab-compare');
+  const tabDeep = document.getElementById('tab-deep-profile');
   const scanCard = document.querySelector('.scan-card');
   const compareCard = document.getElementById('compare-card');
+  const deepTabCard = document.getElementById('deep-profile-tab-card');
 
-  tabFind.addEventListener('click', () => {
-    tabFind.classList.add('active');
-    tabCompare.classList.remove('active');
-    scanCard.style.display = '';
-    compareCard.style.display = 'none';
-  });
-
-  tabCompare.addEventListener('click', () => {
-    tabCompare.classList.add('active');
-    tabFind.classList.remove('active');
-    scanCard.style.display = 'none';
-    compareCard.style.display = '';
+  function activateTab(activeTab) {
+    [tabFind, tabCompare, tabDeep].forEach(t => t && t.classList.remove('active'));
+    activeTab.classList.add('active');
+    scanCard.style.display = activeTab === tabFind ? '' : 'none';
+    compareCard.style.display = activeTab === tabCompare ? '' : 'none';
+    if (deepTabCard) deepTabCard.style.display = activeTab === tabDeep ? '' : 'none';
     lucide.createIcons();
-  });
+  }
+
+  tabFind.addEventListener('click', () => activateTab(tabFind));
+  tabCompare.addEventListener('click', () => activateTab(tabCompare));
+  if (tabDeep) tabDeep.addEventListener('click', () => activateTab(tabDeep));
+
+  // --- DEEP PROFILE FORM (from scan screen tab) ---
+  const deepProfileForm = document.getElementById('deep-profile-form');
+  if (deepProfileForm) {
+    deepProfileForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('deep-profile-username').value.trim();
+      if (!username) return;
+
+      const submitBtn = e.target.querySelector('button[type="submit"]');
+      submitBtn.classList.add('disabled');
+      submitBtn.querySelector('span').textContent = 'Fetching profile…';
+
+      const rssResult = await fetchLetterboxdRSS(username);
+
+      submitBtn.classList.remove('disabled');
+      submitBtn.querySelector('span').textContent = 'Analyze Profile';
+
+      if (!rssResult || rssResult.films.length === 0) {
+        DOM.deepProfileBody.innerHTML = `<div class="dp-no-data"><strong>No data found for "${username}"</strong><p>Make sure the username is correct and that the Letterboxd profile is public.</p></div>`;
+      } else {
+        renderDeepProfile(rssResult.ratings, username, [], DOM.deepProfileBody, rssResult.films);
+      }
+
+      DOM.deepProfileModal.classList.add('active');
+      DOM.deepProfileModal.style.display = 'flex';
+      lucide.createIcons();
+    });
+  }
 
   // Quick pair suggestion buttons in compare card
   document.querySelectorAll('.compare-suggestions .tag-btn').forEach(btn => {
@@ -848,16 +829,21 @@ function initEvents() {
     submitBtn.classList.add('disabled');
     submitBtn.querySelector('span').textContent = 'Fetching profiles…';
 
-    // Fetch real RSS for both users in parallel, fall back to deterministic
+    // Fetch real RSS for both users in parallel — real data only, no faking
     const [rssA, rssB] = await Promise.all([
       fetchLetterboxdRSS(userA),
       fetchLetterboxdRSS(userB)
     ]);
 
-    const baseA = generateDeterministicRatings(userA);
-    const baseB = generateDeterministicRatings(userB);
-    const ratingsA = rssA ? blendRatings(baseA, rssA.ratings) : baseA;
-    const ratingsB = rssB ? blendRatings(baseB, rssB.ratings) : baseB;
+    if (!rssA || !rssB) {
+      submitBtn.classList.remove('disabled');
+      submitBtn.querySelector('span').textContent = 'Reveal Compatibility';
+      alert(`Could not fetch data for ${!rssA ? userA : userB}. Check the username and try again.`);
+      return;
+    }
+
+    const ratingsA = rssA.ratings;
+    const ratingsB = rssB.ratings;
 
     submitBtn.classList.remove('disabled');
     submitBtn.querySelector('span').textContent = 'Reveal Compatibility';

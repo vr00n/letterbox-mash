@@ -1168,16 +1168,23 @@ export function renderRadarChart(canvas, userAffinities, friendAffinities, frien
    DEEP PROFILE
    Renders a rich analysis of the user's rating activity into containerEl.
 ───────────────────────────────────────────────────────────────────────────── */
-export function renderDeepProfile(userRatings, username, allMatches, containerEl) {
+export function renderDeepProfile(userRatings, username, allMatches, containerEl, rssFilms = []) {
   const attrs = TASTE_ATTRIBUTES;
   const affinities = computeAttributeAffinities(userRatings, attrs);
 
-  const ratedIndices = userRatings.map((r, i) => ({ r, i })).filter(x => x.r > 0);
-  const coverage = ratedIndices.length;
-  const avgRating = coverage > 0 ? ratedIndices.reduce((s, x) => s + x.r, 0) / coverage : 0;
+  // Use full RSS film list if available, else fall back to catalog ratings
+  const allFilms = rssFilms.length > 0
+    ? rssFilms
+    : userRatings.map((r, i) => r > 0 ? { title: MASTER_MOVIES[i].title, year: MASTER_MOVIES[i].year, rating: r } : null).filter(Boolean);
+
+  const coverage = allFilms.length;
+  const avgRating = coverage > 0 ? allFilms.reduce((s, f) => s + f.rating, 0) / coverage : 0;
   const stdDev = coverage > 0
-    ? Math.sqrt(ratedIndices.reduce((s, x) => s + (x.r - avgRating) ** 2, 0) / coverage)
+    ? Math.sqrt(allFilms.reduce((s, f) => s + (f.rating - avgRating) ** 2, 0) / coverage)
     : 0;
+
+  // For catalog-based analysis keep the existing ratedIndices too
+  const ratedIndices = userRatings.map((r, i) => ({ r, i })).filter(x => x.r > 0);
 
   let personality, personalityDesc;
   if (avgRating < 2.8) {
@@ -1200,34 +1207,37 @@ export function renderDeepProfile(userRatings, username, allMatches, containerEl
   else if (coverage < 40) covLabel = '🎭 Avid Collector';
   else covLabel = '🏆 Master Archivist';
 
-  const topFilms = ratedIndices
-    .filter(x => x.r >= 4.0)
-    .sort((a, b) => b.r - a.r)
+  // Top/bottom films from full film list
+  const topFilms = [...allFilms]
+    .filter(f => f.rating >= 4.0)
+    .sort((a, b) => b.rating - a.rating)
+    .slice(0, 8)
+    .map(f => ({ film: { title: f.title, year: f.year }, rating: f.rating }));
+
+  const bottomFilms = [...allFilms]
+    .filter(f => f.rating <= 2.0)
+    .sort((a, b) => a.rating - b.rating)
     .slice(0, 6)
-    .map(x => ({ film: MASTER_MOVIES[x.i], rating: x.r }));
+    .map(f => ({ film: { title: f.title, year: f.year }, rating: f.rating }));
 
-  const bottomFilms = ratedIndices
-    .filter(x => x.r <= 2.5)
-    .sort((a, b) => a.r - b.r)
-    .slice(0, 4)
-    .map(x => ({ film: MASTER_MOVIES[x.i], rating: x.r }));
-
+  // Era analysis from full film list
   const eras = { '1940–1979': [], '1980–1999': [], '2000–2014': [], '2015+': [] };
-  ratedIndices.forEach(({ r, i }) => {
-    const yr = MASTER_MOVIES[i].year;
-    if (yr < 1980) eras['1940–1979'].push(r);
-    else if (yr < 2000) eras['1980–1999'].push(r);
-    else if (yr < 2015) eras['2000–2014'].push(r);
-    else eras['2015+'].push(r);
+  allFilms.forEach(({ year, rating }) => {
+    if (!year) return;
+    if (year < 1980) eras['1940–1979'].push(rating);
+    else if (year < 2000) eras['1980–1999'].push(rating);
+    else if (year < 2015) eras['2000–2014'].push(rating);
+    else eras['2015+'].push(rating);
   });
   const eraData = Object.entries(eras)
     .map(([label, rs]) => ({ label, avg: rs.length ? rs.reduce((a, b) => a + b, 0) / rs.length : 0, count: rs.length }))
     .filter(e => e.count > 0)
     .sort((a, b) => b.avg - a.avg);
 
+  // Contrarian opinions — only for catalog films (where community data exists)
   const communityAvgs = MASTER_MOVIES.map((_, idx) => {
     const vals = allMatches.map(m => m.profile.ratings[idx]).filter(r => r > 0);
-    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+    return vals.length >= 2 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
   });
   const contrarian = ratedIndices
     .filter(({ i }) => communityAvgs[i] > 0)
@@ -1255,7 +1265,7 @@ export function renderDeepProfile(userRatings, username, allMatches, containerEl
             <div class="dp-stat-lbl">Avg Rating</div>
           </div>
           <div class="dp-stat">
-            <div class="dp-stat-val">${coverage} / 60</div>
+            <div class="dp-stat-val">${coverage.toLocaleString()}</div>
             <div class="dp-stat-lbl">Films Rated</div>
           </div>
           <div class="dp-stat">
@@ -1264,9 +1274,25 @@ export function renderDeepProfile(userRatings, username, allMatches, containerEl
           </div>
           <div class="dp-stat">
             <div class="dp-stat-val" style="color:${topAttr.color}">${topAttr.label}</div>
-            <div class="dp-stat-lbl">Top Genre</div>
+            <div class="dp-stat-lbl">Top Catalog Genre</div>
           </div>
         </div>
+        ${(() => {
+          // Rating distribution histogram from full film list
+          const buckets = [0.5,1,1.5,2,2.5,3,3.5,4,4.5,5];
+          const counts = buckets.map(b => allFilms.filter(f => f.rating === b).length);
+          const maxCount = Math.max(...counts, 1);
+          return `<div class="dp-histogram">
+            <div class="dp-histogram-label">Rating Distribution</div>
+            <div class="dp-histogram-bars">
+              ${buckets.map((b, idx) => `
+                <div class="dp-hist-col" title="${counts[idx]} films at ${b}★">
+                  <div class="dp-hist-bar" style="height:${Math.round((counts[idx]/maxCount)*100)}%;background:${b >= 4 ? '#00e054' : b >= 3 ? '#ff8000' : '#ef233c'}88"></div>
+                  <div class="dp-hist-label">${b}</div>
+                </div>`).join('')}
+            </div>
+          </div>`;
+        })()}
         <div class="dp-coverage-tag">${covLabel}</div>
       </div>
 

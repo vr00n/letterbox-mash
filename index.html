@@ -57,7 +57,11 @@
           </button>
           <button class="scan-tab-btn" id="tab-compare">
             <i data-lucide="git-compare-arrows"></i>
-            Compare Two Profiles
+            Compare Two
+          </button>
+          <button class="scan-tab-btn" id="tab-deep-profile">
+            <i data-lucide="microscope"></i>
+            Deep Profile
           </button>
         </div>
 
@@ -102,6 +106,30 @@
           </div>
         </div>
       </section>
+
+        <!-- Deep Profile Tab Card (hidden by default) -->
+        <div class="glass-card compare-card" id="deep-profile-tab-card" style="display: none;">
+          <div class="card-glow"></div>
+          <div class="compare-card-header">
+            <h3>Deep <span class="gradient-text">Profile Analysis</span></h3>
+            <p>Enter any Letterboxd username to mine their full rating and review history — personality type, era preferences, contrarian opinions, and more. No signup required.</p>
+          </div>
+          <form id="deep-profile-form">
+            <div class="input-wrapper">
+              <i data-lucide="user"></i>
+              <input id="deep-profile-username" type="text" placeholder="Enter Letterboxd Username" autocomplete="off" spellcheck="false" required>
+              <button type="submit" class="glow-button">
+                <span>Analyze Profile</span>
+                <i data-lucide="microscope"></i>
+              </button>
+            </div>
+          </form>
+          <div class="compare-suggestions">
+            <span class="suggestions-label">Try these accounts:</span>
+            <button type="button" class="tag-btn" onclick="document.getElementById('deep-profile-username').value='karsten';document.getElementById('deep-profile-form').dispatchEvent(new Event('submit'))">karsten</button>
+            <button type="button" class="tag-btn" onclick="document.getElementById('deep-profile-username').value='hanz_n_cheez';document.getElementById('deep-profile-form').dispatchEvent(new Event('submit'))">hanz_n_cheez</button>
+          </div>
+        </div>
 
         <!-- Compare Card (hidden by default) -->
         <div class="glass-card compare-card" id="compare-card" style="display: none;">
@@ -219,99 +247,12 @@
               </button>
             </div>
 
-            <!-- Stats Nerd Breakdown (collapsible) -->
-            <div class="stats-nerd-section">
-              <div class="stats-section-header stats-section-toggle" id="math-stats-toggle">
-                <i data-lucide="binary" class="panel-icon icon-orange"></i>
-                <h4>Mathematical Breakdown</h4>
-                <i data-lucide="chevron-down" class="toggle-chevron" id="math-stats-chevron"></i>
-              </div>
-              <div id="math-stats-body">
-
-              <div class="metrics-grid">
-                <div class="metric-card">
-                  <div class="metric-label-row">
-                    <span class="metric-label">Pearson Correlation</span>
-                    <span class="metric-tooltip-btn" tabindex="0">?
-                      <div class="metric-tooltip-popup">
-                        <span class="tooltip-title">In plain English</span>
-                        "Do you agree on which films are great vs. bad?" Even if one of you rates everything harshly and the other generously, this still detects if your opinions trend in the same direction. +1 = perfect agreement, −1 = total opposites.
-                      </div>
-                    </span>
-                  </div>
-                  <span class="metric-value code-font" id="stat-pearson">--</span>
-                  <div class="metric-progress-bg"><div class="metric-progress-bar bg-orange" id="bar-pearson"></div></div>
-                </div>
-
-                <div class="metric-card">
-                  <div class="metric-label-row">
-                    <span class="metric-label">Adjusted Cosine</span>
-                    <span class="metric-tooltip-btn" tabindex="0">?
-                      <div class="metric-tooltip-popup">
-                        <span class="tooltip-title">In plain English</span>
-                        Measures if your overall taste "direction" matches. Corrects for rating style — a harsh critic and a generous one can still score high here if they love and hate the same films relatively.
-                      </div>
-                    </span>
-                  </div>
-                  <span class="metric-value code-font" id="stat-cosine">--</span>
-                  <div class="metric-progress-bg"><div class="metric-progress-bar bg-green" id="bar-cosine"></div></div>
-                </div>
-
-                <div class="metric-card">
-                  <div class="metric-label-row">
-                    <span class="metric-label">Jaccard Overlap</span>
-                    <span class="metric-tooltip-btn" tabindex="0">?
-                      <div class="metric-tooltip-popup">
-                        <span class="tooltip-title">In plain English</span>
-                        How much of your watchlists overlap? This ignores ratings entirely — it just asks: "what fraction of the films you've each seen did you BOTH see?" Higher = you've watched more of the same movies.
-                      </div>
-                    </span>
-                  </div>
-                  <span class="metric-value code-font" id="stat-jaccard">--</span>
-                  <div class="metric-progress-bg"><div class="metric-progress-bar bg-blue" id="bar-jaccard"></div></div>
-                </div>
-
-                <div class="metric-card">
-                  <div class="metric-label-row">
-                    <span class="metric-label">Vector Distance</span>
-                    <span class="metric-tooltip-btn" tabindex="0">?
-                      <div class="metric-tooltip-popup">
-                        <span class="tooltip-title">In plain English</span>
-                        The raw gap between every single rating in your two profiles. Think of it as the "physical distance" between your taste fingerprints in movie space. Lower = closer. Zero would mean identical ratings on everything.
-                      </div>
-                    </span>
-                  </div>
-                  <span class="metric-value code-font" id="stat-distance">--</span>
-                  <div class="metric-progress-bg"><div class="metric-progress-bar bg-purple" id="bar-distance"></div></div>
-                </div>
-              </div>
-
-              <!-- PCA Coordinate Stats -->
-              <div class="pca-stats-card">
-                <div class="pca-header">
-                  <span class="pca-badge">PCA Coordinates</span>
-                  <span class="pca-variance">Total Explained Variance: <strong class="code-font">48.2%</strong></span>
-                </div>
-                <div class="pca-coords-grid">
-                  <div>
-                    <span class="coord-label" title="Principal Component 1: High values indicate preference for arthouse/indie, low values represent popcorn/action.">PC1 Axis (Art House vs. Blockbuster)</span>
-                    <span class="coord-value code-font" id="stat-pc1">--</span>
-                  </div>
-                  <div>
-                    <span class="coord-label" title="Principal Component 2: High values represent horror/dark themes, low values indicate light/classic movies.">PC2 Axis (Dark/Horror vs. Classic/Light)</span>
-                    <span class="coord-value code-font" id="stat-pc2">--</span>
-                  </div>
-                </div>
-              </div>
-              </div><!-- /math-stats-body -->
-
-              <!-- Mashup Action Button -->
-              <div class="mashup-actions-area">
-                <button id="open-mashup-btn" class="glow-button full-width disabled">
-                  <i data-lucide="git-merge"></i>
-                  <span>Generate KNN Taste Mashup</span>
-                </button>
-              </div>
+            <!-- Taste Mashup Button -->
+            <div class="mashup-actions-area">
+              <button id="open-mashup-btn" class="glow-button full-width disabled">
+                <i data-lucide="git-merge"></i>
+                <span>Generate Taste Mashup</span>
+              </button>
             </div>
           </div>
         </div>
