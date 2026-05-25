@@ -4,7 +4,7 @@
    ========================================================================== */
 
 import { ARCHETYPES, MASTER_MOVIES, generateDeterministicRatings } from './archetypes.js';
-import { performPCA, getKNNNeighbors } from './math.js';
+import { performPCA, getKNNNeighbors, getAdjustedCosineSimilarity, getPearsonCorrelation, getJaccardSimilarity } from './math.js';
 import { 
   renderTerminalLogs, 
   renderCalibrationCards, 
@@ -565,6 +565,75 @@ function initEvents() {
     if (e.key === 'Escape' && DOM.mashupModal.classList.contains('active')) {
       DOM.closeModalBtn.dispatchEvent(new Event('click'));
     }
+  });
+
+  // --- TAB SWITCHER (Find Neighbors / Compare Two Profiles) ---
+  const tabFind = document.getElementById('tab-find');
+  const tabCompare = document.getElementById('tab-compare');
+  const scanCard = document.querySelector('.scan-card');
+  const compareCard = document.getElementById('compare-card');
+
+  tabFind.addEventListener('click', () => {
+    tabFind.classList.add('active');
+    tabCompare.classList.remove('active');
+    scanCard.style.display = '';
+    compareCard.style.display = 'none';
+  });
+
+  tabCompare.addEventListener('click', () => {
+    tabCompare.classList.add('active');
+    tabFind.classList.remove('active');
+    scanCard.style.display = 'none';
+    compareCard.style.display = '';
+    lucide.createIcons();
+  });
+
+  // Quick pair suggestion buttons in compare card
+  document.querySelectorAll('.compare-suggestions .tag-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const [a, b] = btn.dataset.pair.split(',');
+      document.getElementById('compare-user-a').value = a;
+      document.getElementById('compare-user-b').value = b;
+    });
+  });
+
+  // --- COMPARE FORM SUBMIT ---
+  document.getElementById('compare-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const userA = document.getElementById('compare-user-a').value.trim();
+    const userB = document.getElementById('compare-user-b').value.trim();
+    if (!userA || !userB) return;
+
+    const ratingsA = generateDeterministicRatings(userA);
+    const ratingsB = generateDeterministicRatings(userB);
+
+    const cosine = getAdjustedCosineSimilarity(ratingsA, ratingsB);
+    const pearson = getPearsonCorrelation(ratingsA, ratingsB);
+    const jaccard = getJaccardSimilarity(ratingsA, ratingsB);
+    const matchPercent = Math.round(
+      ((cosine + 1) / 2 * 0.5 + (pearson + 1) / 2 * 0.3 + jaccard * 0.2) * 100
+    );
+
+    const profileB = {
+      id: `compare_${userB.toLowerCase()}`,
+      username: userB,
+      displayName: userB,
+      avatar: userB.substring(0, 2).toUpperCase(),
+      ratings: ratingsB,
+      category: 'real',
+      bio: `Letterboxd profile compared directly against ${userA}.`
+    };
+
+    document.getElementById('mashup-partner-name').innerText = userB;
+    document.getElementById('mashup-partner-avatar').innerText = userB.substring(0, 2).toUpperCase();
+    document.getElementById('mashup-user-name').innerText = userA;
+    document.getElementById('mashup-match-percent').innerText = `${matchPercent}%`;
+    document.getElementById('mashup-partner-tag').innerText = '⚡ Direct Comparison';
+
+    renderMashupDNA(ratingsA, profileB, DOM.mashupModal);
+
+    DOM.mashupModal.classList.add('active');
+    DOM.mashupModal.style.display = 'flex';
   });
 }
 

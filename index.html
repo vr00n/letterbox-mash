@@ -49,6 +49,18 @@
           <p class="hero-subtitle">Enter your Letterboxd Username to run a Principal Component Analysis and find your top 10 closest taste-neighbors in our cinephile social network.</p>
         </div>
 
+        <!-- Tab Switcher -->
+        <div class="scan-tab-switcher">
+          <button class="scan-tab-btn active" id="tab-find">
+            <i data-lucide="search"></i>
+            Find Neighbors
+          </button>
+          <button class="scan-tab-btn" id="tab-compare">
+            <i data-lucide="git-compare-arrows"></i>
+            Compare Two Profiles
+          </button>
+        </div>
+
         <div class="glass-card scan-card">
           <div class="card-glow"></div>
           <form id="scan-form" class="scan-form">
@@ -87,6 +99,45 @@
             <div class="terminal-body" id="terminal-output">
               <!-- Logs dynamic generation -->
             </div>
+          </div>
+        </div>
+      </section>
+
+        <!-- Compare Card (hidden by default) -->
+        <div class="glass-card compare-card" id="compare-card" style="display: none;">
+          <div class="card-glow"></div>
+          <div class="compare-card-header">
+            <h3>Taste <span class="gradient-text">Compatibility Check</span></h3>
+            <p>Enter any two Letterboxd usernames to instantly reveal their cinematic alignment — shared favorites, divergences, and an overall match score.</p>
+          </div>
+          <form id="compare-form">
+            <div class="compare-inputs-row">
+              <div class="compare-input-group">
+                <label>Profile A</label>
+                <div class="input-wrapper">
+                  <i data-lucide="user"></i>
+                  <input id="compare-user-a" type="text" placeholder="e.g. martin_scorsese" autocomplete="off" spellcheck="false" required>
+                </div>
+              </div>
+              <div class="compare-vs-divider">VS</div>
+              <div class="compare-input-group">
+                <label>Profile B</label>
+                <div class="input-wrapper">
+                  <i data-lucide="user"></i>
+                  <input id="compare-user-b" type="text" placeholder="e.g. karsten" autocomplete="off" spellcheck="false" required>
+                </div>
+              </div>
+            </div>
+            <button type="submit" class="glow-button full-width">
+              <i data-lucide="zap"></i>
+              <span>Reveal Compatibility</span>
+            </button>
+          </form>
+          <div class="compare-suggestions">
+            <span class="suggestions-label">Quick pairs:</span>
+            <button type="button" class="tag-btn" data-pair="martin_scorsese,karsten">Scorsese vs Karsten</button>
+            <button type="button" class="tag-btn" data-pair="horror_hound,a24_purist">Horror Hound vs A24 Purist</button>
+            <button type="button" class="tag-btn" data-pair="karsten,a24_purist">Karsten vs A24 Purist</button>
           </div>
         </div>
       </section>
@@ -167,25 +218,57 @@
 
               <div class="metrics-grid">
                 <div class="metric-card">
-                  <span class="metric-label" title="Pearson Correlation centered on user's own mean ratings. Normalizes grading styles.">Pearson Correlation</span>
+                  <div class="metric-label-row">
+                    <span class="metric-label">Pearson Correlation</span>
+                    <span class="metric-tooltip-btn" tabindex="0">?
+                      <div class="metric-tooltip-popup">
+                        <span class="tooltip-title">In plain English</span>
+                        "Do you agree on which films are great vs. bad?" Even if one of you rates everything harshly and the other generously, this still detects if your opinions trend in the same direction. +1 = perfect agreement, −1 = total opposites.
+                      </div>
+                    </span>
+                  </div>
                   <span class="metric-value code-font" id="stat-pearson">--</span>
                   <div class="metric-progress-bg"><div class="metric-progress-bar bg-orange" id="bar-pearson"></div></div>
                 </div>
 
                 <div class="metric-card">
-                  <span class="metric-label" title="Cosine angle of centered user rating vectors. Ignores empty ratings skew.">Adjusted Cosine</span>
+                  <div class="metric-label-row">
+                    <span class="metric-label">Adjusted Cosine</span>
+                    <span class="metric-tooltip-btn" tabindex="0">?
+                      <div class="metric-tooltip-popup">
+                        <span class="tooltip-title">In plain English</span>
+                        Measures if your overall taste "direction" matches. Corrects for rating style — a harsh critic and a generous one can still score high here if they love and hate the same films relatively.
+                      </div>
+                    </span>
+                  </div>
                   <span class="metric-value code-font" id="stat-cosine">--</span>
                   <div class="metric-progress-bg"><div class="metric-progress-bar bg-green" id="bar-cosine"></div></div>
                 </div>
 
                 <div class="metric-card">
-                  <span class="metric-label" title="Intersection of watched films divided by Union of watched films. Overlap density.">Jaccard Overlap</span>
+                  <div class="metric-label-row">
+                    <span class="metric-label">Jaccard Overlap</span>
+                    <span class="metric-tooltip-btn" tabindex="0">?
+                      <div class="metric-tooltip-popup">
+                        <span class="tooltip-title">In plain English</span>
+                        How much of your watchlists overlap? This ignores ratings entirely — it just asks: "what fraction of the films you've each seen did you BOTH see?" Higher = you've watched more of the same movies.
+                      </div>
+                    </span>
+                  </div>
                   <span class="metric-value code-font" id="stat-jaccard">--</span>
                   <div class="metric-progress-bg"><div class="metric-progress-bar bg-blue" id="bar-jaccard"></div></div>
                 </div>
 
                 <div class="metric-card">
-                  <span class="metric-label" title="Euclidean distance in normalized taste vector space. Max distance is 10.">Vector Distance</span>
+                  <div class="metric-label-row">
+                    <span class="metric-label">Vector Distance</span>
+                    <span class="metric-tooltip-btn" tabindex="0">?
+                      <div class="metric-tooltip-popup">
+                        <span class="tooltip-title">In plain English</span>
+                        The raw gap between every single rating in your two profiles. Think of it as the "physical distance" between your taste fingerprints in movie space. Lower = closer. Zero would mean identical ratings on everything.
+                      </div>
+                    </span>
+                  </div>
                   <span class="metric-value code-font" id="stat-distance">--</span>
                   <div class="metric-progress-bg"><div class="metric-progress-bar bg-purple" id="bar-distance"></div></div>
                 </div>

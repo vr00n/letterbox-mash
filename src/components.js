@@ -196,8 +196,8 @@ export class InteractiveGraphCanvas {
 
     // Add Neighbors nodes
     knnMatches.forEach((match, idx) => {
-      const angle = (idx / knnMatches.length) * Math.PI * 2;
-      const distance = 160 + (100 - match.matchPercent) * 2.5; // Similarity sets spring rest length!
+      const angle = (idx / knnMatches.length) * Math.PI * 2 - Math.PI / 2; // start at top
+      const distance = 190 + (100 - match.matchPercent) * 1.8; // Similarity sets spring rest length!
 
       const px = width / 2 + Math.cos(angle) * distance;
       const py = height / 2 + Math.sin(angle) * distance;
@@ -349,6 +349,23 @@ export class InteractiveGraphCanvas {
 
     this.canvas.addEventListener('mouseup', releaseMouse);
     this.canvas.addEventListener('mouseleave', releaseMouse);
+
+    // --- SCROLL WHEEL ZOOM (zoom toward cursor) ---
+    this.canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const rect = this.canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      const delta = e.deltaY > 0 ? -0.12 : 0.12;
+      const prevZoom = this.zoom;
+      const newZoom = Math.max(0.35, Math.min(2.8, this.zoom + delta));
+
+      // Zoom toward the mouse cursor position
+      this.panX = mouseX - (mouseX - this.panX) * (newZoom / prevZoom);
+      this.panY = mouseY - (mouseY - this.panY) * (newZoom / prevZoom);
+      this.zoom = newZoom;
+    }, { passive: false });
 
     // --- RESIZE CANVAS ---
     window.addEventListener('resize', () => {

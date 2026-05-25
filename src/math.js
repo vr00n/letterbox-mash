@@ -302,10 +302,10 @@ export class ForceDirectedLayout {
     this.links = links;
     this.width = width;
     this.height = height;
-    this.kRepulsion = 1500;   // Repulsion coefficient
-    this.kSpring = 0.04;      // Spring stiffness
-    this.friction = 0.85;     // Damping
-    this.gravity = 0.05;      // Attraction to center
+    this.kRepulsion = 900;    // Repulsion coefficient
+    this.kSpring = 0.025;     // Spring stiffness
+    this.friction = 0.88;     // Damping (higher = settles faster)
+    this.gravity = 0.018;     // Attraction to center
   }
 
   /**
@@ -327,7 +327,7 @@ export class ForceDirectedLayout {
         const distSq = dx * dx + dy * dy || 1;
         const dist = Math.sqrt(distSq);
 
-        if (dist < 180) { // Limit repulsion radius
+        if (dist < 220) { // Limit repulsion radius
           // Force = k / dist^2
           const force = this.kRepulsion / distSq;
           const fx = (dx / dist) * force;
@@ -399,7 +399,7 @@ export class ForceDirectedLayout {
 
       // Caps maximum velocity to avoid explosions
       const speed = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
-      const maxSpeed = 15;
+      const maxSpeed = 7;
       if (speed > maxSpeed) {
         node.vx = (node.vx / speed) * maxSpeed;
         node.vy = (node.vy / speed) * maxSpeed;
