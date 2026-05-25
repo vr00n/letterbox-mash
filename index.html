@@ -142,18 +142,13 @@
         </div>
       </section>
 
-      <!-- SECTION 2: CALIBRATION SCREEN -->
+      <!-- SECTION 2: CALIBRATION SCREEN (hidden — skipped in flow) -->
       <section id="screen-calibrate" class="screen">
         <div class="glass-card calibration-card">
           <div class="calibration-header">
             <h2>Calibrate <span class="gradient-text">Your Taste Vector</span></h2>
-            <p>Based on your profile activity, we've generated a draft of your rating vector. Review and refine your ratings for these 8 cornerstone films to lock in your position in the Taste Space.</p>
           </div>
-
-          <div class="movie-calibration-grid" id="calibration-movies-container">
-            <!-- Calibrator movie cards populated by JS -->
-          </div>
-
+          <div class="movie-calibration-grid" id="calibration-movies-container"></div>
           <div class="calibration-actions">
             <button id="skip-calibrate-btn" class="secondary-button">Use Default Vector</button>
             <button id="confirm-calibrate-btn" class="glow-button">
@@ -167,68 +162,71 @@
       <!-- SECTION 3: DASHBOARD SCREEN -->
       <section id="screen-dashboard" class="screen">
         <div class="dashboard-grid">
-          <!-- Left Panel: Force Directed Taste Graph -->
-          <div class="glass-card graph-panel">
+
+          <!-- Left Panel: Compatibility Table -->
+          <div class="glass-card table-panel">
             <div class="panel-header">
               <div class="panel-title-area">
-                <i data-lucide="network" class="panel-icon icon-green"></i>
+                <i data-lucide="bar-chart-2" class="panel-icon icon-green"></i>
                 <div>
-                  <h3>Cinephile Neighbors Graph</h3>
-                  <p>Interactive 10-Member Force-Directed Taste Network</p>
+                  <h3>Taste Neighbors</h3>
+                  <p>Ranked by compatibility · click any row to explore</p>
                 </div>
               </div>
-              <div class="graph-controls">
-                <button id="btn-zoom-in" title="Zoom In"><i data-lucide="zoom-in"></i></button>
-                <button id="btn-zoom-out" title="Zoom Out"><i data-lucide="zoom-out"></i></button>
-                <button id="btn-zoom-reset" title="Recenter Graph"><i data-lucide="maximize-2"></i></button>
-                <button id="btn-physics-toggle" title="Re-animate layout"><i data-lucide="refresh-cw"></i></button>
-              </div>
+              <div id="data-source-badge" style="display: none;"></div>
             </div>
-
-            <!-- Filter chips + Canvas -->
-            <div class="canvas-container">
-              <!-- Category filter bar -->
-              <div class="graph-filter-bar">
-                <span class="filter-label">Filter</span>
-                <button class="filter-chip active" data-filter="all">All</button>
-                <button class="filter-chip filter-chip-friends" data-filter="real">👥 Friends</button>
-                <button class="filter-chip filter-chip-indie" data-filter="indie">Indie</button>
-                <button class="filter-chip filter-chip-classics" data-filter="classics">Classic</button>
-                <button class="filter-chip filter-chip-horror" data-filter="horror">Horror</button>
-                <button class="filter-chip filter-chip-popcorn" data-filter="popcorn">Popcorn</button>
-              </div>
-
-              <canvas id="taste-graph-canvas"></canvas>
-              <div class="canvas-legend">
-                <div class="legend-item"><span class="legend-dot color-user"></span><span>You</span></div>
-                <div class="legend-item"><span class="legend-dot color-indie"></span><span>Indie / Art House</span></div>
-                <div class="legend-item"><span class="legend-dot color-horror"></span><span>Horror / Thriller</span></div>
-                <div class="legend-item"><span class="legend-dot color-classics"></span><span>Classic Cinema</span></div>
-                <div class="legend-item"><span class="legend-dot color-popcorn"></span><span>Popcorn / Action</span></div>
-              </div>
-              <div class="canvas-instructions">
-                <i data-lucide="info"></i>
-                <span>Scroll to zoom · Drag to pan · Click a node to select · Drag nodes to reposition</span>
+            <div id="compat-table-container" class="compat-table-container">
+              <div class="table-empty-state">
+                <i data-lucide="loader-2"></i>
+                <p>Computing taste space…</p>
               </div>
             </div>
           </div>
 
-          <!-- Right Panel: Stats Nerd Panel -->
+          <!-- Right Panel: Profile + Radar + Stats -->
           <div class="glass-card stats-panel">
-            <!-- Active Node Preview (Selected Neighbor or User) -->
+            <!-- Selected neighbor profile card -->
             <div class="profile-summary-card" id="selected-profile-card">
               <!-- Rendered Dynamically by JS -->
             </div>
 
-            <!-- Stats Nerd Breakdown -->
-            <div class="stats-nerd-section">
-              <!-- Data source indicator (real RSS vs. simulated) -->
-              <div id="data-source-badge" style="display: none;"></div>
-
+            <!-- Radar chart (shown when neighbor selected) -->
+            <div class="radar-section" id="radar-section" style="display:none;">
               <div class="stats-section-header">
-                <i data-lucide="binary" class="panel-icon icon-orange"></i>
-                <h4>Mathematical Taste Breakdown</h4>
+                <i data-lucide="hexagon" class="panel-icon icon-blue"></i>
+                <h4>Genre Profile Comparison</h4>
               </div>
+              <div class="radar-chart-wrapper">
+                <canvas id="radar-canvas"></canvas>
+                <div class="radar-legend">
+                  <div class="radar-legend-item">
+                    <span class="radar-dot" style="background:rgba(255,255,255,0.7)"></span>
+                    <span id="radar-label-user">You</span>
+                  </div>
+                  <div class="radar-legend-item">
+                    <span class="radar-dot" id="radar-dot-friend"></span>
+                    <span id="radar-label-friend">Friend</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Deep Profile Button -->
+            <div class="deep-profile-actions">
+              <button id="deep-profile-btn" class="secondary-button full-width">
+                <i data-lucide="microscope"></i>
+                <span>Generate Deep Profile</span>
+              </button>
+            </div>
+
+            <!-- Stats Nerd Breakdown (collapsible) -->
+            <div class="stats-nerd-section">
+              <div class="stats-section-header stats-section-toggle" id="math-stats-toggle">
+                <i data-lucide="binary" class="panel-icon icon-orange"></i>
+                <h4>Mathematical Breakdown</h4>
+                <i data-lucide="chevron-down" class="toggle-chevron" id="math-stats-chevron"></i>
+              </div>
+              <div id="math-stats-body">
 
               <div class="metrics-grid">
                 <div class="metric-card">
@@ -305,6 +303,7 @@
                   </div>
                 </div>
               </div>
+              </div><!-- /math-stats-body -->
 
               <!-- Mashup Action Button -->
               <div class="mashup-actions-area">
@@ -323,6 +322,24 @@
     <footer class="app-footer">
       <p>KNN Movie Taste Mashup Engine. Powered by Principal Component Analysis and Cosine Similarity equations.</p>
     </footer>
+  </div>
+
+  <!-- DEEP PROFILE MODAL -->
+  <div class="modal-overlay" id="deep-profile-modal" style="display: none;">
+    <div class="glass-card modal-container dp-modal-container">
+      <div class="modal-header">
+        <div class="modal-header-title">
+          <i data-lucide="microscope" class="icon-blue"></i>
+          <h2>DEEP <span class="gradient-text">PROFILE ANALYSIS</span></h2>
+        </div>
+        <button id="close-deep-profile-btn" class="modal-close-btn">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <div class="modal-body dp-modal-body" id="deep-profile-body">
+        <!-- Populated by renderDeepProfile() -->
+      </div>
+    </div>
   </div>
 
   <!-- SECTION 4: TASTE MASHUP COMPARATOR MODAL -->

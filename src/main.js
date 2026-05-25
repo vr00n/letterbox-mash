@@ -7,25 +7,25 @@ import { ARCHETYPES, MASTER_MOVIES, generateDeterministicRatings } from './arche
 import { performPCA, getKNNNeighbors, getAdjustedCosineSimilarity, getPearsonCorrelation, getJaccardSimilarity } from './math.js';
 import { 
   renderTerminalLogs, 
-  renderCalibrationCards, 
-  InteractiveGraphCanvas, 
+  renderCalibrationCards,
   renderActiveProfileCard, 
-  renderMashupDNA 
+  renderMashupDNA,
+  renderCompatibilityTable,
+  renderRadarChart,
+  renderDeepProfile
 } from './components.js';
 
 // Global App State
 const STATE = {
-  activeScreen: 'screen-scan', // screen-scan, screen-calibrate, screen-dashboard
+  activeScreen: 'screen-scan',
   username: '',
   displayName: '',
   avatar: 'U',
-  ratings: new Array(60).fill(0), // 60 elements for M=60
+  ratings: new Array(60).fill(0),
   archetypes: [...ARCHETYPES],
-  scannedProfiles: [], // Real friends scanned in this session or history
+  scannedProfiles: [],
   knnMatches: [],
-  selectedNode: null,
-  graphCanvas: null,
-  animationFrameId: null,
+  selectedMatch: null,
   hasRealData: false,
   realDataMatchCount: 0
 };
@@ -77,19 +77,28 @@ const DOM = {
   skipCalibrateBtn: document.getElementById('skip-calibrate-btn'),
   confirmCalibrateBtn: document.getElementById('confirm-calibrate-btn'),
   selectedProfileCard: document.getElementById('selected-profile-card'),
-  
-  // Graph controls
-  btnZoomIn: document.getElementById('btn-zoom-in'),
-  btnZoomOut: document.getElementById('btn-zoom-out'),
-  btnZoomReset: document.getElementById('btn-zoom-reset'),
-  btnPhysicsToggle: document.getElementById('btn-physics-toggle'),
-  canvas: document.getElementById('taste-graph-canvas'),
-  
+
+  // Compatibility table
+  compatTableContainer: document.getElementById('compat-table-container'),
+
+  // Radar chart
+  radarSection: document.getElementById('radar-section'),
+  radarCanvas: document.getElementById('radar-canvas'),
+  radarLabelUser: document.getElementById('radar-label-user'),
+  radarLabelFriend: document.getElementById('radar-label-friend'),
+  radarDotFriend: document.getElementById('radar-dot-friend'),
+
+  // Deep Profile
+  deepProfileBtn: document.getElementById('deep-profile-btn'),
+  deepProfileModal: document.getElementById('deep-profile-modal'),
+  closeDeepProfileBtn: document.getElementById('close-deep-profile-btn'),
+  deepProfileBody: document.getElementById('deep-profile-body'),
+
   // Mashup Modal
   openMashupBtn: document.getElementById('open-mashup-btn'),
   closeModalBtn: document.getElementById('close-modal-btn'),
   mashupModal: document.getElementById('mashup-modal'),
-  
+
   // Stats Nerd labels
   statPearson: document.getElementById('stat-pearson'),
   statCosine: document.getElementById('stat-cosine'),
@@ -107,12 +116,6 @@ const DOM = {
  * Transition to a specific screen state.
  */
 function transitionTo(screenId) {
-  // Stop current canvas rendering if active
-  if (STATE.animationFrameId) {
-    cancelAnimationFrame(STATE.animationFrameId);
-    STATE.animationFrameId = null;
-  }
-
   // Handle active states
   Object.keys(DOM.screens).forEach(key => {
     const el = DOM.screens[key];
@@ -192,17 +195,11 @@ function parseLetterboxdCSV(csvText) {
 }
 
 /**
- * Initializes and starts the visual Canvas loop.
+ * Returns a color hex for a neighbor profile based on its category.
  */
-function startCanvasLoop() {
-  if (!STATE.graphCanvas) return;
-  
-  function loop() {
-    STATE.graphCanvas.draw();
-    STATE.animationFrameId = requestAnimationFrame(loop);
-  }
-  
-  loop();
+function getCategoryColor(category) {
+  const colors = { indie: '#00e054', classics: '#ff8000', horror: '#ef233c', popcorn: '#a06cd5', real: '#40bcf4' };
+  return colors[category] || '#40bcf4';
 }
 
 /**
@@ -290,29 +287,25 @@ function computeTasteSpace() {
     }
   });
 
-  // 5. Compute ALL similarity matches (no K cap — graph shows everything)
+  // 5. Compute ALL similarity matches
   const allMatches = getKNNNeighbors(STATE.ratings, comparisonPool, comparisonPool.length);
   STATE.knnMatches = allMatches;
 
   userProfile.pc1 = userProjection.pc1;
   userProfile.pc2 = userProjection.pc2;
 
-  // 6. Transition to dashboard FIRST so the canvas has real dimensions
-  if (!STATE.graphCanvas) {
-    STATE.graphCanvas = new InteractiveGraphCanvas(DOM.canvas, handleNodeSelected);
-  }
+  // 6. Transition to dashboard
+  transitionTo('screen-dashboard');
 
   // 7. Push PCA labels
   DOM.statPC1.innerText = userProjection.pc1.toFixed(2);
   DOM.statPC2.innerText = userProjection.pc2.toFixed(2);
 
-  transitionTo('screen-dashboard');
-  startCanvasLoop();
+  // 8. Render the compatibility table
+  renderCompatibilityTable(STATE.ratings, allMatches, DOM.compatTableContainer, handleRowSelected);
 
-  // Defer setGraph one frame — canvas has dimensions now that screen is visible
-  requestAnimationFrame(() => {
-    STATE.graphCanvas.setGraph(userProfile, allMatches);
-  });
+  // 9. Show self profile card by default
+  renderActiveProfileCard({ profile: userProfile, stats: null }, DOM.selectedProfileCard);
 
   // Show real vs. simulated data badge
   const badge = document.getElementById('data-source-badge');
@@ -337,70 +330,56 @@ function computeTasteSpace() {
 }
 
 /**
- * Callback fired when a node is highlighted or clicked in the graph.
+ * Fired when a row in the compatibility table is clicked.
  */
-function handleNodeSelected(node, isUser) {
-  STATE.selectedNode = node;
-  
-  // Render profile panel
-  renderActiveProfileCard(node, DOM.selectedProfileCard);
+function handleRowSelected(match, userAffinities, friendAffinities) {
+  STATE.selectedMatch = match;
 
-  if (isUser) {
-    // Reset stats nerd panel for central user
-    DOM.statPearson.innerText = '1.00 (Self)';
-    DOM.statCosine.innerText = '1.00 (Self)';
-    DOM.statJaccard.innerText = '1.00 (Self)';
-    DOM.statDistance.innerText = '0.00 (Self)';
+  renderActiveProfileCard(match, DOM.selectedProfileCard);
 
-    DOM.barPearson.style.width = '100%';
-    DOM.barCosine.style.width = '100%';
-    DOM.barJaccard.style.width = '100%';
-    DOM.barDistance.style.width = '0%';
+  // Radar chart
+  const friendColor = getCategoryColor(match.profile.category);
+  DOM.radarSection.style.display = '';
+  DOM.radarLabelUser.innerText = STATE.username || 'You';
+  DOM.radarLabelFriend.innerText = match.profile.username;
+  DOM.radarDotFriend.style.background = friendColor;
+  requestAnimationFrame(() => renderRadarChart(DOM.radarCanvas, userAffinities, friendAffinities, friendColor));
 
-    // Disable comparison button for self
-    DOM.openMashupBtn.classList.add('disabled');
-  } else {
-    // Populate neighbors metrics
-    const stats = node.stats;
-    
-    // Astro relatable interpretations
-    let pearsonLabel = 'Celestial Friction';
-    if (stats.pearson > 0.8) pearsonLabel = 'Soul Alignment';
-    else if (stats.pearson > 0.55) pearsonLabel = 'High Harmony';
-    else if (stats.pearson > 0.25) pearsonLabel = 'Parallel Orbits';
-    else if (stats.pearson > -0.2) pearsonLabel = 'Neutral Synergy';
-    
-    let cosineLabel = 'Wandering Stars';
-    if (stats.cosine > 0.8) cosineLabel = 'Cosmic Telepathy';
-    else if (stats.cosine > 0.55) cosineLabel = 'Good Synastry';
-    else if (stats.cosine > 0.2) cosineLabel = 'Weak Aura Overlap';
-    
-    let jaccardLabel = 'Alien Ecosystems';
-    if (stats.jaccard > 0.35) jaccardLabel = 'Telepathic Link';
-    else if (stats.jaccard > 0.18) jaccardLabel = 'Shared Footprint';
-    else if (stats.jaccard > 0.08) jaccardLabel = 'Faint Intersection';
-    
-    let distanceLabel = 'Lightyears Apart';
-    if (stats.distance < 4.0) distanceLabel = 'Identical Dimensions';
-    else if (stats.distance < 6.5) distanceLabel = 'Co-Existing Orbits';
-    else if (stats.distance < 8.5) distanceLabel = 'Distant Galaxies';
+  // Maths stats
+  const stats = match.stats;
 
-    DOM.statPearson.innerText = `${stats.pearson.toFixed(2)} (${pearsonLabel})`;
-    DOM.statCosine.innerText = `${stats.cosine.toFixed(2)} (${cosineLabel})`;
-    DOM.statJaccard.innerText = `${stats.jaccard.toFixed(2)} (${jaccardLabel})`;
-    DOM.statDistance.innerText = `${stats.distance.toFixed(1)} (${distanceLabel})`;
+  let pearsonLabel = 'Celestial Friction';
+  if (stats.pearson > 0.8) pearsonLabel = 'Soul Alignment';
+  else if (stats.pearson > 0.55) pearsonLabel = 'High Harmony';
+  else if (stats.pearson > 0.25) pearsonLabel = 'Parallel Orbits';
+  else if (stats.pearson > -0.2) pearsonLabel = 'Neutral Synergy';
 
-    // Update graphical progress tracks (centered from 0-1 or 0-10 scale)
-    DOM.barPearson.style.width = `${Math.max(0, Math.min(100, ((stats.pearson + 1) / 2) * 100))}%`;
-    DOM.barCosine.style.width = `${Math.max(0, Math.min(100, ((stats.cosine + 1) / 2) * 100))}%`;
-    DOM.barJaccard.style.width = `${stats.jaccard * 100}%`;
-    
-    // Vector distance caps around 10
-    DOM.barDistance.style.width = `${Math.max(0, Math.min(100, (stats.distance / 10) * 100))}%`;
+  let cosineLabel = 'Wandering Stars';
+  if (stats.cosine > 0.8) cosineLabel = 'Cosmic Telepathy';
+  else if (stats.cosine > 0.55) cosineLabel = 'Good Synastry';
+  else if (stats.cosine > 0.2) cosineLabel = 'Weak Aura Overlap';
 
-    // Enable comparison button
-    DOM.openMashupBtn.classList.remove('disabled');
-  }
+  let jaccardLabel = 'Alien Ecosystems';
+  if (stats.jaccard > 0.35) jaccardLabel = 'Telepathic Link';
+  else if (stats.jaccard > 0.18) jaccardLabel = 'Shared Footprint';
+  else if (stats.jaccard > 0.08) jaccardLabel = 'Faint Intersection';
+
+  let distanceLabel = 'Lightyears Apart';
+  if (stats.distance < 4.0) distanceLabel = 'Identical Dimensions';
+  else if (stats.distance < 6.5) distanceLabel = 'Co-Existing Orbits';
+  else if (stats.distance < 8.5) distanceLabel = 'Distant Galaxies';
+
+  DOM.statPearson.innerText = `${stats.pearson.toFixed(2)} (${pearsonLabel})`;
+  DOM.statCosine.innerText = `${stats.cosine.toFixed(2)} (${cosineLabel})`;
+  DOM.statJaccard.innerText = `${stats.jaccard.toFixed(2)} (${jaccardLabel})`;
+  DOM.statDistance.innerText = `${stats.distance.toFixed(1)} (${distanceLabel})`;
+
+  DOM.barPearson.style.width = `${Math.max(0, Math.min(100, ((stats.pearson + 1) / 2) * 100))}%`;
+  DOM.barCosine.style.width = `${Math.max(0, Math.min(100, ((stats.cosine + 1) / 2) * 100))}%`;
+  DOM.barJaccard.style.width = `${stats.jaccard * 100}%`;
+  DOM.barDistance.style.width = `${Math.max(0, Math.min(100, (stats.distance / 10) * 100))}%`;
+
+  DOM.openMashupBtn.classList.remove('disabled');
 }
 
 /**
@@ -698,10 +677,11 @@ function initEvents() {
       body.appendChild(friendLine);
       body.scrollTop = body.scrollHeight;
 
-      await new Promise(r => setTimeout(r, 900));
+      await new Promise(r => setTimeout(r, 600));
 
-      renderCalibrationCards(STATE.ratings, DOM.calibrationContainer);
-      transitionTo('screen-calibrate');
+      DOM.activeUserBadge.style.display = 'flex';
+      DOM.activeUsername.innerText = STATE.username;
+      computeTasteSpace();
     });
   });
 
@@ -750,34 +730,41 @@ function initEvents() {
     transitionTo('screen-scan');
   });
 
-  // --- INTERACTIVE CANVAS GRAPH CONTROLS ---
-  DOM.btnZoomIn.addEventListener('click', () => STATE.graphCanvas && STATE.graphCanvas.zoomIn());
-  DOM.btnZoomOut.addEventListener('click', () => STATE.graphCanvas && STATE.graphCanvas.zoomOut());
-  DOM.btnZoomReset.addEventListener('click', () => STATE.graphCanvas && STATE.graphCanvas.resetZoom());
-  
-  // Physics toggle repurposed as "Re-animate layout"
-  DOM.btnPhysicsToggle.addEventListener('click', () => {
-    if (!STATE.graphCanvas) return;
-    STATE.graphCanvas.resetLayout();
-    DOM.btnPhysicsToggle.classList.add('active');
-    setTimeout(() => DOM.btnPhysicsToggle.classList.remove('active'), 600);
+  // --- MATH STATS TOGGLE ---
+  const mathStatsToggle = document.getElementById('math-stats-toggle');
+  const mathStatsBody = document.getElementById('math-stats-body');
+  const mathStatsChevron = document.getElementById('math-stats-chevron');
+  if (mathStatsToggle) {
+    mathStatsToggle.addEventListener('click', () => {
+      const isHidden = mathStatsBody.style.display === 'none';
+      mathStatsBody.style.display = isHidden ? '' : 'none';
+      if (mathStatsChevron) mathStatsChevron.style.transform = isHidden ? '' : 'rotate(-90deg)';
+    });
+  }
+
+  // --- DEEP PROFILE ---
+  DOM.deepProfileBtn.addEventListener('click', () => {
+    renderDeepProfile(STATE.ratings, STATE.username, STATE.knnMatches, DOM.deepProfileBody);
+    DOM.deepProfileModal.classList.add('active');
+    DOM.deepProfileModal.style.display = 'flex';
+    lucide.createIcons();
   });
 
-  // --- GRAPH FILTER CHIPS ---
-  document.querySelectorAll('.filter-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-      document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
-      chip.classList.add('active');
-      if (STATE.graphCanvas) STATE.graphCanvas.applyFilter(chip.dataset.filter);
-    });
+  DOM.closeDeepProfileBtn.addEventListener('click', () => {
+    DOM.deepProfileModal.classList.remove('active');
+    DOM.deepProfileModal.style.display = 'none';
+  });
+
+  DOM.deepProfileModal.addEventListener('click', (e) => {
+    if (e.target === DOM.deepProfileModal) DOM.closeDeepProfileBtn.dispatchEvent(new Event('click'));
   });
 
   // --- OPEN TASTE MASHUP COMPARATOR MODAL ---
   DOM.openMashupBtn.addEventListener('click', () => {
-    if (DOM.openMashupBtn.classList.contains('disabled') || !STATE.selectedNode) return;
+    if (DOM.openMashupBtn.classList.contains('disabled') || !STATE.selectedMatch) return;
 
-    const partner = STATE.selectedNode.profile;
-    const matchPercent = STATE.selectedNode.stats.matchPercent;
+    const partner = STATE.selectedMatch.profile;
+    const matchPercent = STATE.selectedMatch.stats.matchPercent;
 
     // Set modal top header details
     document.getElementById('mashup-partner-name').innerText = partner.displayName;
@@ -793,7 +780,6 @@ function initEvents() {
     else if (partner.category === 'popcorn') tag = 'Max Sci-Fi / Action';
     document.getElementById('mashup-partner-tag').innerText = tag;
 
-    // Render detailed modal cards (lists, gaps, grids)
     renderMashupDNA(STATE.ratings, partner, DOM.mashupModal);
 
     // Show modal overlay
@@ -814,10 +800,10 @@ function initEvents() {
     }
   });
 
-  // Esc key closure
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && DOM.mashupModal.classList.contains('active')) {
-      DOM.closeModalBtn.dispatchEvent(new Event('click'));
+    if (e.key === 'Escape') {
+      if (DOM.mashupModal.classList.contains('active')) DOM.closeModalBtn.dispatchEvent(new Event('click'));
+      if (DOM.deepProfileModal.classList.contains('active')) DOM.closeDeepProfileBtn.dispatchEvent(new Event('click'));
     }
   });
 

@@ -417,3 +417,24 @@ export class ForceDirectedLayout {
     });
   }
 }
+
+/**
+ * Computes a 0-100 affinity score for each taste attribute based on the user's
+ * average rating of films in that attribute group.
+ * @param {number[]} ratings - 60-element ratings vector.
+ * @param {Array}    attributes - TASTE_ATTRIBUTES array.
+ * @returns {Object} Map of attribute key → affinity score (0–100).
+ */
+export function computeAttributeAffinities(ratings, attributes) {
+  const result = {};
+  attributes.forEach(attr => {
+    const ratedIds = attr.filmIds.filter(id => ratings[id] > 0);
+    if (ratedIds.length === 0) {
+      result[attr.key] = 0;
+    } else {
+      const sum = ratedIds.reduce((acc, id) => acc + ratings[id], 0);
+      result[attr.key] = Math.round((sum / (ratedIds.length * 5)) * 100);
+    }
+  });
+  return result;
+}
