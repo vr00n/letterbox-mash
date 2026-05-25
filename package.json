@@ -1,0 +1,14 @@
+{
+  "name": "letterbox-knn-mashup",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "KNN Taste Mashup and social network graph for Letterboxd profiles using dynamic client-side PCA and force-directed layouts.",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^5.2.0"
+  }
+}
