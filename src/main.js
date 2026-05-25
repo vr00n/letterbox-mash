@@ -290,28 +290,29 @@ function computeTasteSpace() {
     }
   });
 
-  // 5. Compute KNN Matches against the combined comparison pool
-  // The search automatically prioritizes friends because they are in the pool!
-  const knnMatches = getKNNNeighbors(STATE.ratings, comparisonPool, 10);
-  STATE.knnMatches = knnMatches;
+  // 5. Compute ALL similarity matches (no K cap — graph shows everything)
+  const allMatches = getKNNNeighbors(STATE.ratings, comparisonPool, comparisonPool.length);
+  STATE.knnMatches = allMatches;
 
   userProfile.pc1 = userProjection.pc1;
   userProfile.pc2 = userProjection.pc2;
 
-  // 6. Build and launch Canvas graph
+  // 6. Transition to dashboard FIRST so the canvas has real dimensions
   if (!STATE.graphCanvas) {
     STATE.graphCanvas = new InteractiveGraphCanvas(DOM.canvas, handleNodeSelected);
   }
 
-  STATE.graphCanvas.setGraph(userProfile, knnMatches);
-  
-  // 7. Push user coordinates to labels
+  // 7. Push PCA labels
   DOM.statPC1.innerText = userProjection.pc1.toFixed(2);
   DOM.statPC2.innerText = userProjection.pc2.toFixed(2);
 
-  // Transition to dashboard and start drawing!
   transitionTo('screen-dashboard');
   startCanvasLoop();
+
+  // Defer setGraph one frame — canvas has dimensions now that screen is visible
+  requestAnimationFrame(() => {
+    STATE.graphCanvas.setGraph(userProfile, allMatches);
+  });
 
   // Show real vs. simulated data badge
   const badge = document.getElementById('data-source-badge');
@@ -754,10 +755,21 @@ function initEvents() {
   DOM.btnZoomOut.addEventListener('click', () => STATE.graphCanvas && STATE.graphCanvas.zoomOut());
   DOM.btnZoomReset.addEventListener('click', () => STATE.graphCanvas && STATE.graphCanvas.resetZoom());
   
+  // Physics toggle repurposed as "Re-animate layout"
   DOM.btnPhysicsToggle.addEventListener('click', () => {
     if (!STATE.graphCanvas) return;
-    STATE.graphCanvas.physicsEnabled = !STATE.graphCanvas.physicsEnabled;
-    DOM.btnPhysicsToggle.classList.toggle('active', STATE.graphCanvas.physicsEnabled);
+    STATE.graphCanvas.resetLayout();
+    DOM.btnPhysicsToggle.classList.add('active');
+    setTimeout(() => DOM.btnPhysicsToggle.classList.remove('active'), 600);
+  });
+
+  // --- GRAPH FILTER CHIPS ---
+  document.querySelectorAll('.filter-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      if (STATE.graphCanvas) STATE.graphCanvas.applyFilter(chip.dataset.filter);
+    });
   });
 
   // --- OPEN TASTE MASHUP COMPARATOR MODAL ---

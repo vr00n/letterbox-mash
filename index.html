@@ -181,12 +181,23 @@
                 <button id="btn-zoom-in" title="Zoom In"><i data-lucide="zoom-in"></i></button>
                 <button id="btn-zoom-out" title="Zoom Out"><i data-lucide="zoom-out"></i></button>
                 <button id="btn-zoom-reset" title="Recenter Graph"><i data-lucide="maximize-2"></i></button>
-                <button id="btn-physics-toggle" class="active" title="Toggle Physics Animation"><i data-lucide="play"></i></button>
+                <button id="btn-physics-toggle" title="Re-animate layout"><i data-lucide="refresh-cw"></i></button>
               </div>
             </div>
 
-            <!-- HTML5 Canvas for Physics Layout -->
+            <!-- Filter chips + Canvas -->
             <div class="canvas-container">
+              <!-- Category filter bar -->
+              <div class="graph-filter-bar">
+                <span class="filter-label">Filter</span>
+                <button class="filter-chip active" data-filter="all">All</button>
+                <button class="filter-chip filter-chip-friends" data-filter="real">👥 Friends</button>
+                <button class="filter-chip filter-chip-indie" data-filter="indie">Indie</button>
+                <button class="filter-chip filter-chip-classics" data-filter="classics">Classic</button>
+                <button class="filter-chip filter-chip-horror" data-filter="horror">Horror</button>
+                <button class="filter-chip filter-chip-popcorn" data-filter="popcorn">Popcorn</button>
+              </div>
+
               <canvas id="taste-graph-canvas"></canvas>
               <div class="canvas-legend">
                 <div class="legend-item"><span class="legend-dot color-user"></span><span>You</span></div>
@@ -197,7 +208,7 @@
               </div>
               <div class="canvas-instructions">
                 <i data-lucide="info"></i>
-                <span>Drag nodes to explore forces. Hover to preview profiles. Click a node to select and compare.</span>
+                <span>Scroll to zoom · Drag to pan · Click a node to select · Drag nodes to reposition</span>
               </div>
             </div>
           </div>

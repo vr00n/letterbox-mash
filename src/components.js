@@ -132,7 +132,9 @@ export function renderCalibrationCards(ratingsVector, containerElement) {
 }
 
 /**
- * 3. Interactive Force-Directed Canvas Visualization for the 10 Nearest Neighbors
+ * 3. Clustered Radial Graph — all neighbours arranged in concentric match-% rings,
+ *    colour-coded by taste category, with hover/click/pan/zoom and filter support.
+ *    No physics engine — positions are computed statically and animated via lerp.
  */
 export class InteractiveGraphCanvas {
   constructor(canvasElement, onNodeSelected) {
@@ -140,429 +142,407 @@ export class InteractiveGraphCanvas {
     this.ctx = canvasElement.getContext('2d');
     this.onNodeSelected = onNodeSelected;
 
-    this.nodes = [];
-    this.links = [];
-    this.physics = null;
-    this.activeNodeId = null;
-    this.hoverNodeId = null;
+    this.allNodes   = [];   // all nodes regardless of filter
+    this.activeNodeId  = null;
+    this.hoverNodeId   = null;
+    this.activeFilter  = 'all';
 
-    // View translation and scaling (Zoom / Pan)
+    // View
     this.zoom = 1;
     this.panX = 0;
     this.panY = 0;
-    this.isPanning = false;
-    this.startPanX = 0;
-    this.startPanY = 0;
-
-    // Physics enable flag
-    this.physicsEnabled = true;
-
-    // Mouse states for node dragging
+    this.isPanning  = false;
+    this.startPanX  = 0;
+    this.startPanY  = 0;
     this.draggedNode = null;
+
+    // No-op: kept so existing callers (physicsEnabled toggle) don't throw
+    this.physicsEnabled = false;
 
     this.initEvents();
   }
 
-  /**
-   * Initializes the nodes and spring links between active user and their KNN matches.
-   */
-  setGraph(userProfile, knnMatches) {
-    const width = this.canvas.clientWidth;
-    const height = this.canvas.clientHeight;
-
-    this.canvas.width = width;
-    this.canvas.height = height;
-
-    this.nodes = [];
-    this.links = [];
-
-    // Add Central User node
-    this.nodes.push({
-      id: 'user_node',
-      x: width / 2,
-      y: height / 2,
-      vx: 0,
-      vy: 0,
-      radius: 22,
-      isCentral: true,
-      label: userProfile.username,
-      displayName: userProfile.displayName,
-      color: '#ffffff',
-      profile: userProfile,
-      glowColor: 'rgba(255, 255, 255, 0.4)'
-    });
-
-    this.activeNodeId = 'user_node';
-
-    // Add Neighbors nodes
-    knnMatches.forEach((match, idx) => {
-      const angle = (idx / knnMatches.length) * Math.PI * 2 - Math.PI / 2; // start at top
-      const distance = 190 + (100 - match.matchPercent) * 1.8; // Similarity sets spring rest length!
-
-      const px = width / 2 + Math.cos(angle) * distance;
-      const py = height / 2 + Math.sin(angle) * distance;
-
-      const isFriend = match.profile.category === 'real';
-      let color = '#00e054'; // default green
-      let glow = 'rgba(0, 224, 84, 0.3)';
-      if (isFriend) {
-        color = '#40bcf4'; // glowing teal/blue for friends
-        glow = 'rgba(64, 188, 244, 0.5)';
-      } else {
-        if (match.profile.category === 'horror') { color = '#ef233c'; glow = 'rgba(239, 35, 60, 0.3)'; }
-        else if (match.profile.category === 'classics') { color = '#ff8000'; glow = 'rgba(255, 128, 0, 0.3)'; }
-        else if (match.profile.category === 'popcorn') { color = '#a06cd5'; glow = 'rgba(160, 108, 213, 0.3)'; } // Purple popcorn
-      }
-
-      const node = {
-        id: match.profile.id,
-        x: px,
-        y: py,
-        vx: 0,
-        vy: 0,
-        radius: 14 + (match.matchPercent - 60) * 0.25, // Higher similarity -> larger node
-        isCentral: false,
-        label: match.profile.username,
-        displayName: match.profile.displayName,
-        color: color,
-        glowColor: glow,
-        profile: match.profile,
-        matchPercent: match.matchPercent,
-        stats: match
-      };
-
-      this.nodes.push(node);
-
-      // Connect central user to neighbors
-      this.links.push({
-        sourceId: 'user_node',
-        targetId: node.id,
-        length: distance,
-        strength: match.matchPercent / 100
-      });
-    });
-
-    this.physics = new ForceDirectedLayout(this.nodes, this.links, width, height);
-    this.zoom = 1;
-    this.panX = 0;
-    this.panY = 0;
-
-    // Fire default selection on active user
-    this.onNodeSelected(this.nodes[0], true);
-
-    // Draw one frame immediately so the canvas isn't blank before the rAF loop starts
-    this.draw();
+  /** Nodes currently shown based on active filter */
+  get visibleNodes() {
+    if (this.activeFilter === 'all') return this.allNodes;
+    return this.allNodes.filter(n => n.isCentral || n.category === this.activeFilter);
   }
 
   /**
-   * Bind DOM Canvas mouse, touch, and resize handlers.
+   * Builds a ring-based radial layout. Nodes fly out from the centre via lerp animation.
+   * Accepts ALL neighbours (no cap) and groups them into four match-% rings.
    */
-  initEvents() {
-    const getMouseCoords = (e) => {
-      const rect = this.canvas.getBoundingClientRect();
-      // Translate raw mouse coords based on pan and zoom
-      const rawX = e.clientX - rect.left;
-      const rawY = e.clientY - rect.top;
-      return {
-        x: (rawX - this.panX) / this.zoom,
-        y: (rawY - this.panY) / this.zoom,
-        rawX,
-        rawY
-      };
+  setGraph(userProfile, allNeighbors) {
+    // Size from parent — called after transitionTo() so dimensions are real
+    const parent = this.canvas.parentElement;
+    const W = Math.max(parent ? (parent.clientWidth  || parent.offsetWidth)  : 600, 400);
+    const H = Math.max(parent ? (parent.clientHeight || parent.offsetHeight) : 400, 320);
+    this.canvas.width  = W;
+    this.canvas.height = H;
+
+    const cx = W / 2;
+    const cy = H / 2;
+    const maxR = Math.min(W, H) / 2 * 0.86;
+
+    this.allNodes = [];
+    this.zoom = 1;
+    this.panX = 0;
+    this.panY = 0;
+    this.activeFilter = 'all';
+
+    // ── Category colour map ──────────────────────────────────────────────────
+    const catColor = {
+      real:     '#40bcf4',
+      indie:    '#00e054',
+      horror:   '#ef233c',
+      classics: '#ff8000',
+      popcorn:  '#a06cd5'
     };
 
-    // --- MOUSE DOWN (Drag start or Pan start) ---
-    this.canvas.addEventListener('mousedown', (e) => {
-      const coords = getMouseCoords(e);
-      
-      // Check if clicked on a node
-      let clickedNode = null;
-      for (let i = this.nodes.length - 1; i >= 0; i--) {
-        const node = this.nodes[i];
-        const dx = coords.x - node.x;
-        const dy = coords.y - node.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        
-        if (dist <= node.radius + 6) {
-          clickedNode = node;
-          break;
-        }
-      }
+    // ── Central user ─────────────────────────────────────────────────────────
+    this.allNodes.push({
+      id: 'user_node',
+      x: cx, y: cy, targetX: cx, targetY: cy,
+      radius: 26, isCentral: true,
+      label: userProfile.username,
+      color: '#ffffff', category: 'user',
+      profile: userProfile, matchPercent: 100
+    });
 
-      if (clickedNode) {
-        // Drag Node
-        this.draggedNode = clickedNode;
-        clickedNode.isDragged = true;
-        
-        // Select Node
-        this.activeNodeId = clickedNode.id;
-        this.onNodeSelected(clickedNode, clickedNode.isCentral);
+    // ── Sort: real friends first, then by category, then match% desc ─────────
+    const catOrder = ['real', 'indie', 'classics', 'horror', 'popcorn'];
+    const sorted = [...allNeighbors].sort((a, b) => {
+      const d = catOrder.indexOf(a.profile.category) - catOrder.indexOf(b.profile.category);
+      return d !== 0 ? d : b.matchPercent - a.matchPercent;
+    });
+
+    // ── Assign rings by match% ───────────────────────────────────────────────
+    const ringDefs = [
+      { minPct: 75, frac: 0.30 },
+      { minPct: 60, frac: 0.52 },
+      { minPct: 45, frac: 0.72 },
+      { minPct:  0, frac: 0.90 }
+    ];
+    const buckets = [[], [], [], []];
+    sorted.forEach(m => {
+      if      (m.matchPercent >= 75) buckets[0].push(m);
+      else if (m.matchPercent >= 60) buckets[1].push(m);
+      else if (m.matchPercent >= 45) buckets[2].push(m);
+      else                           buckets[3].push(m);
+    });
+
+    buckets.forEach((bucket, ri) => {
+      const n = bucket.length;
+      if (n === 0) return;
+
+      // Expand ring radius if nodes would be too cramped
+      const baseR    = maxR * ringDefs[ri].frac;
+      const minSpacR = (n * 30) / (2 * Math.PI);   // 30 px per node
+      const ringR    = Math.max(baseR, minSpacR);
+
+      bucket.forEach((match, idx) => {
+        const angle = (idx / n) * Math.PI * 2 - Math.PI / 2;
+        const tx = cx + Math.cos(angle) * ringR;
+        const ty = cy + Math.sin(angle) * ringR;
+        const color = catColor[match.profile.category] || '#00e054';
+
+        this.allNodes.push({
+          id: match.profile.id,
+          x: cx, y: cy,           // start at centre
+          targetX: tx, targetY: ty,
+          radius: Math.max(8, 11 + (match.matchPercent - 40) * 0.1),
+          isCentral: false,
+          label: match.profile.username,
+          color, category: match.profile.category,
+          profile: match.profile, matchPercent: match.matchPercent,
+          stats: match, ringIdx: ri, ringR
+        });
+      });
+    });
+
+    this.activeNodeId = 'user_node';
+    this.onNodeSelected(this.allNodes[0], true);
+  }
+
+  /** Toggle filter; 'all' shows everything. */
+  applyFilter(filter) {
+    this.activeFilter = filter;
+    // If active selection is now hidden, revert to user
+    const active = this.allNodes.find(n => n.id === this.activeNodeId);
+    if (filter !== 'all' && active && !active.isCentral && active.category !== filter) {
+      this.activeNodeId = 'user_node';
+      this.onNodeSelected(this.allNodes[0], true);
+    }
+  }
+
+  /** Re-trigger fly-out animation from centre. */
+  resetLayout() {
+    const u = this.allNodes.find(n => n.isCentral);
+    const cx = u ? u.x : this.canvas.width  / 2;
+    const cy = u ? u.y : this.canvas.height / 2;
+    this.allNodes.forEach(n => { if (!n.isCentral) { n.x = cx; n.y = cy; } });
+    this.zoom = 1; this.panX = 0; this.panY = 0;
+  }
+
+  initEvents() {
+    const toWorld = (e) => {
+      const rect = this.canvas.getBoundingClientRect();
+      const rx = e.clientX - rect.left;
+      const ry = e.clientY - rect.top;
+      return { x: (rx - this.panX) / this.zoom, y: (ry - this.panY) / this.zoom, rx, ry };
+    };
+
+    const hitTest = (wx, wy) => {
+      const vis = this.visibleNodes;
+      for (let i = vis.length - 1; i >= 0; i--) {
+        const n = vis[i];
+        const dx = wx - n.x, dy = wy - n.y;
+        if (Math.sqrt(dx*dx + dy*dy) <= n.radius + 7) return n;
+      }
+      return null;
+    };
+
+    this.canvas.addEventListener('mousedown', e => {
+      const { x, y } = toWorld(e);
+      const hit = hitTest(x, y);
+      if (hit) {
+        this.draggedNode = hit;
+        hit.isDragged = true;
+        this.activeNodeId = hit.id;
+        this.onNodeSelected(hit, hit.isCentral);
       } else {
-        // Pan Canvas
         this.isPanning = true;
         this.startPanX = e.clientX - this.panX;
         this.startPanY = e.clientY - this.panY;
       }
     });
 
-    // --- MOUSE MOVE (Dragging, Panning, or Hover Checks) ---
-    this.canvas.addEventListener('mousemove', (e) => {
-      const coords = getMouseCoords(e);
-
+    this.canvas.addEventListener('mousemove', e => {
+      const { x, y } = toWorld(e);
       if (this.draggedNode) {
-        this.draggedNode.x = coords.x;
-        this.draggedNode.y = coords.y;
+        this.draggedNode.x = x; this.draggedNode.y = y;
+        this.draggedNode.targetX = x; this.draggedNode.targetY = y;
       } else if (this.isPanning) {
         this.panX = e.clientX - this.startPanX;
         this.panY = e.clientY - this.startPanY;
       } else {
-        // Check hover
-        let hoveredNode = null;
-        for (let i = this.nodes.length - 1; i >= 0; i--) {
-          const node = this.nodes[i];
-          const dx = coords.x - node.x;
-          const dy = coords.y - node.y;
-          if (Math.sqrt(dx * dx + dy * dy) <= node.radius + 6) {
-            hoveredNode = node;
-            break;
-          }
-        }
-
-        if (hoveredNode) {
-          this.hoverNodeId = hoveredNode.id;
-          this.canvas.style.cursor = 'pointer';
-        } else {
-          this.hoverNodeId = null;
-          this.canvas.style.cursor = 'grab';
-        }
+        const hit = hitTest(x, y);
+        this.hoverNodeId = hit ? hit.id : null;
+        this.canvas.style.cursor = hit ? 'pointer' : 'grab';
       }
     });
 
-    // --- MOUSE UP / LEAVE (Release actions) ---
-    const releaseMouse = () => {
-      if (this.draggedNode) {
-        this.draggedNode.isDragged = false;
-        this.draggedNode = null;
-      }
+    const release = () => {
+      if (this.draggedNode) { this.draggedNode.isDragged = false; this.draggedNode = null; }
       this.isPanning = false;
     };
+    this.canvas.addEventListener('mouseup',    release);
+    this.canvas.addEventListener('mouseleave', release);
 
-    this.canvas.addEventListener('mouseup', releaseMouse);
-    this.canvas.addEventListener('mouseleave', releaseMouse);
-
-    // --- SCROLL WHEEL ZOOM (zoom toward cursor) ---
-    this.canvas.addEventListener('wheel', (e) => {
+    this.canvas.addEventListener('wheel', e => {
       e.preventDefault();
       const rect = this.canvas.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-
-      const delta = e.deltaY > 0 ? -0.12 : 0.12;
-      const prevZoom = this.zoom;
-      const newZoom = Math.max(0.35, Math.min(2.8, this.zoom + delta));
-
-      // Zoom toward the mouse cursor position
-      this.panX = mouseX - (mouseX - this.panX) * (newZoom / prevZoom);
-      this.panY = mouseY - (mouseY - this.panY) * (newZoom / prevZoom);
-      this.zoom = newZoom;
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      const delta  = e.deltaY > 0 ? -0.12 : 0.12;
+      const prev   = this.zoom;
+      this.zoom    = Math.max(0.25, Math.min(3.5, this.zoom + delta));
+      this.panX    = mx - (mx - this.panX) * (this.zoom / prev);
+      this.panY    = my - (my - this.panY) * (this.zoom / prev);
     }, { passive: false });
 
-    // --- RESIZE CANVAS ---
     window.addEventListener('resize', () => {
-      if (!this.canvas.offsetParent) return; // Ignore if hidden
-      const w = this.canvas.clientWidth;
-      const h = this.canvas.clientHeight;
-      this.canvas.width = w;
-      this.canvas.height = h;
-      if (this.physics) {
-        this.physics.width = w;
-        this.physics.height = h;
+      if (!this.canvas.offsetParent) return;
+      const p = this.canvas.parentElement;
+      if (!p || !p.clientWidth) return;
+      const W = p.clientWidth, H = p.clientHeight;
+      // Rescale existing node positions proportionally
+      if (this.canvas.width > 0) {
+        const sx = W / this.canvas.width, sy = H / this.canvas.height;
+        this.allNodes.forEach(n => { n.x *= sx; n.y *= sy; n.targetX *= sx; n.targetY *= sy; });
       }
+      this.canvas.width = W; this.canvas.height = H;
     });
   }
 
-  /**
-   * Triggers zoom modifications
-   */
-  zoomIn() { this.zoom = Math.min(this.zoom + 0.15, 2.5); }
-  zoomOut() { this.zoom = Math.max(this.zoom - 0.15, 0.4); }
-  resetZoom() {
-    this.zoom = 1;
-    this.panX = 0;
-    this.panY = 0;
-    // Centralize central user node manually
-    const user = this.nodes.find(n => n.isCentral);
-    if (user) {
-      user.x = this.canvas.width / 2;
-      user.y = this.canvas.height / 2;
-    }
-  }
+  zoomIn()  { this.zoom = Math.min(this.zoom + 0.15, 3.5); }
+  zoomOut() { this.zoom = Math.max(this.zoom - 0.15, 0.25); }
+  resetZoom() { this.zoom = 1; this.panX = 0; this.panY = 0; }
 
-  /**
-   * Main render canvas frame loop.
-   */
   draw() {
-    // 1. Tick Physics
-    if (this.physicsEnabled && this.physics) {
-      this.physics.tick();
-    }
+    const ctx = this.ctx;
+    const W = this.canvas.width, H = this.canvas.height;
+    if (!W || !H || !this.allNodes.length) return;
 
-    // 2. Clear Screen
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-
-    // 3. Save Matrix, Apply Zoom & Pan
-    this.ctx.save();
-    this.ctx.translate(this.panX, this.panY);
-    this.ctx.scale(this.zoom, this.zoom);
-
-    // 4. DRAW CONNECTIVE LINKS (SPRINGS)
-    this.links.forEach(link => {
-      const source = this.nodes.find(n => n.id === link.sourceId);
-      const target = this.nodes.find(n => n.id === link.targetId);
-      if (!source || !target) return;
-
-      const isActive = this.activeNodeId === target.id || this.activeNodeId === 'user_node';
-      const isHovered = this.hoverNodeId === target.id || this.hoverNodeId === 'user_node';
-
-      // Design line style based on similarity strength
-      this.ctx.beginPath();
-      this.ctx.moveTo(source.x, source.y);
-      this.ctx.lineTo(target.x, target.y);
-
-      // Line thickness based on similarity match
-      this.ctx.lineWidth = 1 + (target.matchPercent - 50) * 0.1;
-      
-      // Line transparency based on similarity and focus states
-      let alpha = 0.15 + (target.matchPercent - 50) * 0.01;
-      if (this.activeNodeId === target.id) {
-        alpha = 0.8;
-      } else if (this.activeNodeId !== 'user_node' && this.activeNodeId !== target.id) {
-        alpha = 0.05; // Fade out non-active lines
-      }
-
-      this.ctx.strokeStyle = `rgba(0, 224, 84, ${alpha})`;
-      this.ctx.stroke();
-
-      // Draw match text overlay mid-way on active/hover links
-      if (isActive || isHovered) {
-        const midX = (source.x + target.x) / 2;
-        const midY = (source.y + target.y) / 2;
-        
-        this.ctx.save();
-        this.ctx.fillStyle = '#14181c';
-        this.ctx.strokeStyle = `rgba(255, 255, 255, 0.08)`;
-        this.ctx.lineWidth = 1;
-        
-        const labelText = `${target.matchPercent}%`;
-        this.ctx.font = 'bold 9px "Space Grotesk"';
-        const labelWidth = this.ctx.measureText(labelText).width;
-        
-        this.ctx.beginPath();
-        this.ctx.roundRect(midX - labelWidth/2 - 6, midY - 7, labelWidth + 12, 14, 4);
-        this.ctx.fill();
-        this.ctx.stroke();
-        
-        this.ctx.fillStyle = '#00e054';
-        this.ctx.textAlign = 'center';
-        this.ctx.textBaseline = 'middle';
-        this.ctx.fillText(labelText, midX, midY);
-        this.ctx.restore();
+    // ── Lerp nodes toward targets ────────────────────────────────────────────
+    this.allNodes.forEach(n => {
+      if (!n.isCentral && !n.isDragged) {
+        n.x += (n.targetX - n.x) * 0.07;
+        n.y += (n.targetY - n.y) * 0.07;
       }
     });
 
-    // 5. DRAW GRAPH NODES
-    this.nodes.forEach(node => {
-      const isHovered = this.hoverNodeId === node.id;
-      const isActive = this.activeNodeId === node.id;
+    ctx.clearRect(0, 0, W, H);
+    ctx.save();
+    ctx.translate(this.panX, this.panY);
+    ctx.scale(this.zoom, this.zoom);
 
-      // Outer Glow shadow on active/hover nodes
-      if (isHovered || isActive) {
-        this.ctx.save();
-        this.ctx.shadowColor = node.color;
-        this.ctx.shadowBlur = isActive ? 22 : 12;
-      }
+    const vis     = this.visibleNodes;
+    const userNode = this.allNodes.find(n => n.isCentral);
+    const ucx = userNode ? userNode.x : W / 2;
+    const ucy = userNode ? userNode.y : H / 2;
+    const maxR = Math.min(W, H) / 2 * 0.86;
 
-      // Draw outer circle accent border
-      this.ctx.beginPath();
-      this.ctx.arc(node.x, node.y, node.radius + (isActive ? 3 : 0), 0, Math.PI * 2);
-      this.ctx.fillStyle = node.color;
-      this.ctx.fill();
+    // ── 1. Ring backgrounds (concentric dashed circles) ──────────────────────
+    const ringMeta = [
+      { frac: 0.30, stroke: 'rgba(0,224,84,0.14)',    fill: 'rgba(0,224,84,0.025)',    label: '≥75% match' },
+      { frac: 0.52, stroke: 'rgba(64,188,244,0.11)',  fill: 'rgba(64,188,244,0.018)',  label: '60–75%' },
+      { frac: 0.72, stroke: 'rgba(255,128,0,0.09)',   fill: 'rgba(255,128,0,0.015)',   label: '45–60%' },
+      { frac: 0.90, stroke: 'rgba(160,108,213,0.07)', fill: 'rgba(160,108,213,0.01)',  label: '<45%' }
+    ];
+    ringMeta.forEach(rm => {
+      const r = maxR * rm.frac;
+      ctx.beginPath();
+      ctx.arc(ucx, ucy, r, 0, Math.PI * 2);
+      ctx.fillStyle = rm.fill;
+      ctx.fill();
+      ctx.setLineDash([5, 7]);
+      ctx.strokeStyle = rm.stroke;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.setLineDash([]);
 
-      // Custom dashed halo for real scanned friends in the graph
-      if (node.profile.category === 'real' && !node.isCentral) {
-        this.ctx.save();
-        this.ctx.strokeStyle = '#40bcf4';
-        this.ctx.lineWidth = 1.5;
-        this.ctx.setLineDash([4, 3]);
-        this.ctx.beginPath();
-        this.ctx.arc(node.x, node.y, node.radius + 5, 0, Math.PI * 2);
-        this.ctx.stroke();
-        this.ctx.restore();
-      }
+      ctx.save();
+      ctx.font = '9px "Space Grotesk"';
+      ctx.fillStyle = 'rgba(255,255,255,0.18)';
+      ctx.textAlign = 'center';
+      ctx.fillText(rm.label, ucx, ucy - r + 13);
+      ctx.restore();
+    });
 
-      if (isHovered || isActive) {
-        this.ctx.restore();
-      }
+    // ── 2. Edges ─────────────────────────────────────────────────────────────
+    vis.forEach(n => {
+      if (n.isCentral) return;
+      const isActive = this.activeNodeId === n.id;
+      const isHover  = this.hoverNodeId  === n.id;
 
-      // Inner Core Circle (gives deep 3D orb appearance)
-      this.ctx.beginPath();
-      this.ctx.arc(node.x, node.y, node.radius - 2, 0, Math.PI * 2);
-      const gradient = this.ctx.createRadialGradient(
-        node.x - node.radius/3, node.y - node.radius/3, 1,
-        node.x, node.y, node.radius
-      );
-      
-      if (node.isCentral) {
-        gradient.addColorStop(0, '#ffffff');
-        gradient.addColorStop(1, '#667788');
-      } else {
-        gradient.addColorStop(0, '#ffffff');
-        gradient.addColorStop(0.2, node.color);
-        gradient.addColorStop(1, '#060a0f');
-      }
-      
-      this.ctx.fillStyle = gradient;
-      this.ctx.fill();
+      let alpha = 0.06 + (n.matchPercent - 40) * 0.003;
+      if (isActive) alpha = 0.75;
+      else if (this.activeNodeId !== 'user_node' && !isActive) alpha = 0.025;
 
-      // Node Label Text Tag
-      this.ctx.save();
-      this.ctx.font = node.isCentral ? 'bold 11px "Space Grotesk"' : '500 10px "Space Grotesk"';
-      this.ctx.textAlign = 'center';
-      this.ctx.textBaseline = 'top';
+      const hex = Math.round(alpha * 255).toString(16).padStart(2, '0');
+      ctx.beginPath();
+      ctx.moveTo(ucx, ucy);
+      ctx.lineTo(n.x, n.y);
+      ctx.strokeStyle = n.color + hex;
+      ctx.lineWidth   = isActive ? 1.8 : 0.7 + (n.matchPercent - 40) * 0.018;
+      ctx.stroke();
 
-      const tagText = node.profile.category === 'real' && !node.isCentral ? `👥 ${node.label}` : node.label;
-      const textWidth = this.ctx.measureText(tagText).width;
-
-      // Draw glass label container below node
-      const labelY = node.y + node.radius + 6;
-      this.ctx.fillStyle = 'rgba(20, 24, 28, 0.85)';
-      this.ctx.strokeStyle = isActive ? node.color : 'rgba(255, 255, 255, 0.08)';
-      this.ctx.lineWidth = 1;
-      
-      this.ctx.beginPath();
-      this.ctx.roundRect(node.x - textWidth/2 - 8, labelY - 3, textWidth + 16, 15, 4);
-      this.ctx.fill();
-      this.ctx.stroke();
-
-      // Draw text
-      this.ctx.fillStyle = isActive ? '#ffffff' : '#9aabbb';
-      this.ctx.fillText(tagText, node.x, labelY - 1);
-      this.ctx.restore();
-
-      // Central avatar initials inside node sphere
-      if (node.radius > 16) {
-        this.ctx.save();
-        this.ctx.fillStyle = node.isCentral ? '#000000' : '#ffffff';
-        this.ctx.font = `bold ${node.isCentral ? '10px' : '9px'} "Space Grotesk"`;
-        this.ctx.textAlign = 'center';
-        this.ctx.textBaseline = 'middle';
-        const initials = node.profile.avatar || node.label.substring(0,2).toUpperCase();
-        this.ctx.fillText(initials, node.x, node.y);
-        this.ctx.restore();
+      if (isActive || isHover) {
+        const mx = (ucx + n.x) / 2, my = (ucy + n.y) / 2;
+        const lbl = `${n.matchPercent}%`;
+        ctx.font = 'bold 9px "Space Grotesk"';
+        const tw = ctx.measureText(lbl).width;
+        ctx.fillStyle = 'rgba(12,16,20,0.92)';
+        ctx.beginPath();
+        ctx.roundRect(mx - tw/2 - 5, my - 7, tw + 10, 14, 4);
+        ctx.fill();
+        ctx.fillStyle = n.color;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(lbl, mx, my);
       }
     });
 
-    this.ctx.restore(); // Restore transform matrix
+    // ── 3. Nodes ─────────────────────────────────────────────────────────────
+    vis.forEach(n => {
+      const isActive = this.activeNodeId === n.id;
+      const isHover  = this.hoverNodeId  === n.id;
+
+      // Glow
+      if (isActive || isHover) {
+        ctx.save();
+        ctx.shadowColor = n.color;
+        ctx.shadowBlur  = isActive ? 22 : 12;
+      }
+
+      // Outer ring
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.radius + (isActive ? 3 : 0), 0, Math.PI * 2);
+      ctx.fillStyle = n.color;
+      ctx.fill();
+
+      // Dashed halo for real friends
+      if (n.category === 'real' && !n.isCentral) {
+        ctx.save();
+        ctx.strokeStyle = n.color;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, n.radius + 5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+
+      if (isActive || isHover) ctx.restore();
+
+      // Inner orb gradient
+      const grad = ctx.createRadialGradient(n.x - n.radius/3, n.y - n.radius/3, 1, n.x, n.y, n.radius);
+      grad.addColorStop(0, '#ffffff');
+      grad.addColorStop(n.isCentral ? 0.6 : 0.25, n.isCentral ? '#aabbcc' : n.color);
+      grad.addColorStop(1, '#060a0f');
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.radius - 1.5, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // Initials
+      if (n.radius > 11) {
+        ctx.save();
+        ctx.fillStyle = n.isCentral ? '#000' : '#fff';
+        ctx.font = `bold ${n.isCentral ? 10 : 8}px "Space Grotesk"`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(n.profile.avatar || n.label.substring(0, 2).toUpperCase(), n.x, n.y);
+        ctx.restore();
+      }
+
+      // Label chip below node
+      ctx.save();
+      const isFriend = n.category === 'real' && !n.isCentral;
+      const tag = isFriend ? `👥 ${n.label}` : n.label;
+      ctx.font = `${n.isCentral ? 'bold ' : ''}${n.isCentral ? 11 : 9}px "Space Grotesk"`;
+      const tw  = ctx.measureText(tag).width;
+      const ly  = n.y + n.radius + 6;
+      ctx.fillStyle   = 'rgba(12,16,20,0.88)';
+      ctx.strokeStyle = isActive ? n.color : 'rgba(255,255,255,0.06)';
+      ctx.lineWidth   = 1;
+      ctx.beginPath();
+      ctx.roundRect(n.x - tw/2 - 7, ly - 3, tw + 14, 15, 4);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle    = isActive ? '#fff' : '#8fa0b0';
+      ctx.textAlign    = 'center'; ctx.textBaseline = 'top';
+      ctx.fillText(tag, n.x, ly - 1);
+      ctx.restore();
+
+      // Hover tooltip
+      if (isHover && !n.isCentral) {
+        const tip = `${n.label}  ${n.matchPercent}% match`;
+        ctx.font = '10px "Space Grotesk"';
+        const tipW = ctx.measureText(tip).width + 22;
+        const tipX = n.x - tipW / 2;
+        const tipY = n.y - n.radius - 26;
+        ctx.fillStyle   = 'rgba(8,12,16,0.96)';
+        ctx.strokeStyle = n.color;
+        ctx.lineWidth   = 1;
+        ctx.beginPath();
+        ctx.roundRect(tipX, tipY, tipW, 20, 6);
+        ctx.fill(); ctx.stroke();
+        ctx.fillStyle    = '#fff';
+        ctx.textAlign    = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(tip, n.x, tipY + 10);
+      }
+    });
+
+    ctx.restore();
   }
 }
 
