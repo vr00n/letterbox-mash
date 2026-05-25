@@ -316,11 +316,18 @@ function computeTasteSpace() {
   // Show real vs. simulated data badge
   const badge = document.getElementById('data-source-badge');
   if (badge) {
-    if (STATE.hasRealData) {
-      badge.innerHTML = `<i data-lucide="wifi"></i> <span>Live RSS — <strong>${STATE.realDataMatchCount} real rating${STATE.realDataMatchCount > 1 ? 's' : ''}</strong> from Letterboxd</span>`;
+    const realFriendCount = STATE.scannedProfiles.filter(p =>
+      p.category === 'real' && p.username.toLowerCase() !== STATE.username.toLowerCase()
+    ).length;
+
+    if (STATE.hasRealData || realFriendCount > 0) {
+      const parts = [];
+      if (STATE.hasRealData) parts.push(`<strong>${STATE.realDataMatchCount}</strong> real rating${STATE.realDataMatchCount > 1 ? 's' : ''}`);
+      if (realFriendCount > 0) parts.push(`<strong>${realFriendCount}</strong> real friend${realFriendCount > 1 ? 's' : ''} in graph`);
+      badge.innerHTML = `<i data-lucide="wifi"></i> <span>Live Letterboxd data — ${parts.join(', ')}</span>`;
       badge.className = 'data-source-badge data-source-live';
     } else {
-      badge.innerHTML = `<i data-lucide="cpu"></i> <span>Simulated — no RSS matches found</span>`;
+      badge.innerHTML = `<i data-lucide="cpu"></i> <span>Simulated — Letterboxd data unavailable</span>`;
       badge.className = 'data-source-badge data-source-sim';
     }
     badge.style.display = 'flex';
@@ -533,6 +540,88 @@ function blendRatings(deterministicRatings, realRatings) {
 }
 
 /**
+ * Fetches the list of usernames that `username` follows on Letterboxd.
+ * Parses avatar href links from the public following page HTML.
+ * Returns an array of username strings (lowercase), or [] on failure.
+ */
+async function fetchFollowing(username) {
+  const url = `https://letterboxd.com/${username}/following/`;
+  const proxies = [
+    { url: `https://corsproxy.io/?${encodeURIComponent(url)}`, mode: 'text' },
+    { url: `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, mode: 'json' }
+  ];
+
+  for (const proxy of proxies) {
+    try {
+      const res = await fetch(proxy.url, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+
+      const text = proxy.mode === 'json' ? (await res.json()).contents : await res.text();
+      if (!text) continue;
+
+      // Avatar links on following page: class="avatar -a40" href="/username/"
+      const regex = /class="avatar[^"]*" href="\/([a-zA-Z0-9_-]+)\/"/g;
+      const usernames = [];
+      let match;
+      while ((match = regex.exec(text)) !== null) {
+        const u = match[1].toLowerCase();
+        if (u !== username.toLowerCase() && !usernames.includes(u)) {
+          usernames.push(u);
+        }
+      }
+
+      if (usernames.length > 0) return usernames;
+    } catch (_) {
+      // try next proxy
+    }
+  }
+
+  return [];
+}
+
+/**
+ * Batch-fetches RSS ratings for a list of friend usernames in parallel.
+ * Uses best-effort single-proxy fetch with short timeout per friend.
+ * Returns profile objects for friends with at least 1 catalog film match.
+ */
+async function fetchFriendProfiles(usernames, maxFriends = 12) {
+  const toFetch = usernames.slice(0, maxFriends);
+
+  const results = await Promise.all(toFetch.map(async (uname) => {
+    try {
+      const rssUrl = `https://letterboxd.com/${uname}/rss/`;
+      const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(rssUrl)}`;
+      const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) return null;
+
+      const text = await res.text();
+      if (!text || !text.includes('<letterboxd:filmTitle>')) return null;
+
+      const rss = parseRSSXML(text);
+      // Friends with 0 catalog matches still appear in the graph with deterministic vector
+      const baseRatings = generateDeterministicRatings(uname);
+      const ratings = rss.matchCount > 0 ? blendRatings(baseRatings, rss.ratings) : baseRatings;
+
+      return {
+        id: `real_${uname}`,
+        username: uname,
+        displayName: uname,
+        avatar: uname.substring(0, 2).toUpperCase(),
+        ratings,
+        category: 'real',
+        bio: rss.matchCount > 0
+          ? `Your Letterboxd friend. ${rss.matchCount} catalog film${rss.matchCount !== 1 ? 's' : ''} matched from their RSS.`
+          : `Your Letterboxd friend (taste vector estimated — no catalog overlaps yet).`
+      };
+    } catch (_) {
+      return null;
+    }
+  }));
+
+  return results.filter(Boolean);
+}
+
+/**
  * Binds active event listeners to elements.
  */
 function initEvents() {
@@ -549,39 +638,63 @@ function initEvents() {
     STATE.hasRealData = false;
     STATE.realDataMatchCount = 0;
 
-    // Kick off real RSS fetch in parallel with the terminal animation
+    // Kick off all network work immediately — runs in parallel with the terminal animation.
+    // 1. User's own RSS ratings
     const rssFetchPromise = fetchLetterboxdRSS(rawVal);
+    // 2. Following list → then batch-fetch each friend's RSS
+    const friendProfilesPromise = fetchFollowing(rawVal).then(followingUsernames =>
+      followingUsernames.length > 0 ? fetchFriendProfiles(followingUsernames, 12) : []
+    );
 
     DOM.scanForm.querySelector('button[type="submit"]').classList.add('disabled');
 
     renderTerminalLogs(rawVal, DOM.terminal, async () => {
       const body = DOM.terminal.querySelector('#terminal-output');
 
-      // Append a "waiting" line while the fetch finishes (usually already done)
       const waitLine = document.createElement('p');
       waitLine.className = 'terminal-line terminal-text terminal-accent-blue';
-      waitLine.innerHTML = '> [NET] Verifying live profile data...';
+      waitLine.innerHTML = '> [NET] Awaiting live profile & social graph data...';
       body.appendChild(waitLine);
       body.scrollTop = body.scrollHeight;
 
-      const result = await rssFetchPromise;
+      // Await both fetches in parallel
+      const [rssResult, friendProfiles] = await Promise.all([rssFetchPromise, friendProfilesPromise]);
       waitLine.remove();
 
-      const statusLine = document.createElement('p');
-      statusLine.className = 'terminal-line terminal-text';
-
-      if (result && result.matchCount >= 1) {
-        STATE.ratings = blendRatings(STATE.ratings, result.ratings);
+      // --- Own ratings ---
+      const ownLine = document.createElement('p');
+      ownLine.className = 'terminal-line terminal-text';
+      if (rssResult && rssResult.matchCount >= 1) {
+        STATE.ratings = blendRatings(STATE.ratings, rssResult.ratings);
         STATE.hasRealData = true;
-        STATE.realDataMatchCount = result.matchCount;
-        statusLine.classList.add('terminal-accent');
-        statusLine.innerHTML = `> [LIVE] ✓ Real Letterboxd data loaded — ${result.matchCount} catalog film${result.matchCount > 1 ? 's' : ''} matched from your RSS feed.`;
+        STATE.realDataMatchCount = rssResult.matchCount;
+        ownLine.classList.add('terminal-accent');
+        ownLine.innerHTML = `> [LIVE] ✓ Your ratings: ${rssResult.matchCount} real catalog match${rssResult.matchCount > 1 ? 'es' : ''} loaded from RSS.`;
       } else {
-        statusLine.innerHTML = '> [SIM] RSS returned no catalog matches — using deterministic taste vector estimation.';
-        statusLine.style.color = 'var(--accent-orange)';
+        ownLine.style.color = 'var(--accent-orange)';
+        ownLine.innerHTML = '> [SIM] Your profile: no catalog RSS matches — using estimated taste vector.';
       }
+      body.appendChild(ownLine);
 
-      body.appendChild(statusLine);
+      // --- Friends ---
+      const friendLine = document.createElement('p');
+      friendLine.className = 'terminal-line terminal-text';
+      if (friendProfiles.length > 0) {
+        // Merge into scannedProfiles (overwrite stale entries)
+        friendProfiles.forEach(profile => {
+          const idx = STATE.scannedProfiles.findIndex(p => p.id === profile.id);
+          if (idx !== -1) STATE.scannedProfiles[idx] = profile;
+          else STATE.scannedProfiles.push(profile);
+        });
+        try { localStorage.setItem('letterboxd_knn_scanned', JSON.stringify(STATE.scannedProfiles)); } catch (_) {}
+
+        friendLine.classList.add('terminal-accent');
+        friendLine.innerHTML = `> [SOCIAL] ✓ ${friendProfiles.length} real friend${friendProfiles.length > 1 ? 's' : ''} from your following list added to the taste network.`;
+      } else {
+        friendLine.style.color = 'var(--accent-orange)';
+        friendLine.innerHTML = '> [SOCIAL] Following list unavailable — showing archetype neighbors as fallback.';
+      }
+      body.appendChild(friendLine);
       body.scrollTop = body.scrollHeight;
 
       await new Promise(r => setTimeout(r, 900));

@@ -24,20 +24,20 @@ export function renderTerminalLogs(username, terminalElement, onComplete) {
 
   const logs = [
     { text: `[SYSTEM] Initializing letterboxd-taste-crawler.sh...`, time: 300, class: 'terminal-accent-blue' },
-    { text: `[NET] Connecting to Letterboxd public feeds for user: "${username}"...`, time: 600 },
-    { text: `[NET] Connected! Status code: 200 OK`, time: 300, class: 'terminal-accent' },
-    { text: `[CRAWL] Fetching RSS feed (https://letterboxd.com/${username}/rss/)...`, time: 700 },
-    { text: `[CRAWL] Parsed user profile. Found 47 ratings and 89 watched history items.`, time: 500, class: 'terminal-accent' },
-    { text: `[ENGINE] Matching movie records with our Cinephile Master Catalog (M=60)...`, time: 600 },
-    { text: `[ENGINE] Aligned 14 co-rated catalog entries. Imputing sparse vector.`, time: 400 },
+    { text: `[NET] Fetching RSS feed → letterboxd.com/${username}/rss/`, time: 500 },
+    { text: `[NET] Fetching following list → letterboxd.com/${username}/following/`, time: 400 },
+    { text: `[CRAWL] Parsing diary entries and film ratings from RSS...`, time: 600 },
+    { text: `[CRAWL] Resolving following list → queuing friend RSS fetches in parallel...`, time: 500, class: 'terminal-accent-blue' },
+    { text: `[ENGINE] Matching rated films against Cinephile Master Catalog (M=60)...`, time: 600 },
+    { text: `[ENGINE] Imputing sparse rating vector for unmatched catalog entries...`, time: 400 },
     { text: `[MATH] Initializing principal component decomposition of dimensions [N=25, M=60]...`, time: 600 },
     { text: `[MATH] Computing ratings covariance matrix...`, time: 400 },
     { text: `[MATH] PC1 Eigenvector extracted (Variance explained: 29.4%). Axis maps: [Art House vs. Blockbuster]`, time: 600, class: 'terminal-accent-orange' },
     { text: `[MATH] PC2 Eigenvector extracted (Variance explained: 18.8%). Axis maps: [Horror vs. Classic]`, time: 500, class: 'terminal-accent-orange' },
-    { text: `[MATH] Centered user taste coordinates: PC1 = -0.42, PC2 = 1.34`, time: 300 },
-    { text: `[KNN] Locating K-Nearest Neighbors in Letterboxd Taste Space...`, time: 500 },
-    { text: `[KNN] 10 Nearest Neighbors clustered successfully!`, time: 400, class: 'terminal-accent' },
-    { text: `[SYSTEM] Taste mashup compiled. Launching dashboard...`, time: 500, class: 'terminal-accent-blue' }
+    { text: `[KNN] Building neighbor pool from real friends + archetype fallbacks...`, time: 500 },
+    { text: `[KNN] Computing cosine, Pearson, Jaccard similarity for each neighbor...`, time: 500 },
+    { text: `[KNN] Top 10 taste neighbors ranked. Social graph ready.`, time: 400, class: 'terminal-accent' },
+    { text: `[SYSTEM] Taste space compiled. Launching dashboard...`, time: 400, class: 'terminal-accent-blue' }
   ];
 
   let currentLine = 0;
