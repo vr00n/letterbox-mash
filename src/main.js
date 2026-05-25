@@ -25,7 +25,9 @@ const STATE = {
   knnMatches: [],
   selectedNode: null,
   graphCanvas: null,
-  animationFrameId: null
+  animationFrameId: null,
+  hasRealData: false,
+  realDataMatchCount: 0
 };
 
 // Load scanned profiles from localStorage
@@ -310,6 +312,20 @@ function computeTasteSpace() {
   // Transition to dashboard and start drawing!
   transitionTo('screen-dashboard');
   startCanvasLoop();
+
+  // Show real vs. simulated data badge
+  const badge = document.getElementById('data-source-badge');
+  if (badge) {
+    if (STATE.hasRealData) {
+      badge.innerHTML = `<i data-lucide="wifi"></i> <span>Live RSS — <strong>${STATE.realDataMatchCount} real rating${STATE.realDataMatchCount > 1 ? 's' : ''}</strong> from Letterboxd</span>`;
+      badge.className = 'data-source-badge data-source-live';
+    } else {
+      badge.innerHTML = `<i data-lucide="cpu"></i> <span>Simulated — no RSS matches found</span>`;
+      badge.className = 'data-source-badge data-source-sim';
+    }
+    badge.style.display = 'flex';
+    lucide.createIcons();
+  }
 }
 
 /**
@@ -439,11 +455,89 @@ function initDropZone() {
 }
 
 /**
+ * Parses a Letterboxd RSS XML string and maps rated films to MASTER_MOVIES catalog.
+ * Handles both raw text and CDATA-wrapped title fields.
+ */
+function parseRSSXML(xmlText) {
+  const ratings = new Array(60).fill(0);
+  let matchCount = 0;
+
+  const itemRegex = /<item>([\s\S]*?)<\/item>/g;
+  let itemMatch;
+
+  while ((itemMatch = itemRegex.exec(xmlText)) !== null) {
+    const itemXml = itemMatch[1];
+
+    const titleMatch = itemXml.match(/<letterboxd:filmTitle>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/letterboxd:filmTitle>/);
+    const yearMatch  = itemXml.match(/<letterboxd:filmYear>(\d+)<\/letterboxd:filmYear>/);
+    const ratingMatch = itemXml.match(/<letterboxd:memberRating>([\d.]+)<\/letterboxd:memberRating>/);
+
+    if (!titleMatch || !ratingMatch) continue;
+
+    const title  = titleMatch[1].trim();
+    const year   = yearMatch ? parseInt(yearMatch[1]) : null;
+    const rating = parseFloat(ratingMatch[1]);
+
+    if (!title || isNaN(rating)) continue;
+
+    const film = MASTER_MOVIES.find(m =>
+      m.title.toLowerCase() === title.toLowerCase() && (!year || m.year === year)
+    );
+
+    if (film && ratings[film.id] === 0) {
+      ratings[film.id] = rating;
+      matchCount++;
+    }
+  }
+
+  return { ratings, matchCount };
+}
+
+/**
+ * Attempts to fetch a user's real Letterboxd RSS feed via two CORS proxies.
+ * Returns { ratings, matchCount } on success, or null on failure.
+ * Letterboxd RSS contains up to ~50 most recent diary entries with ratings.
+ */
+async function fetchLetterboxdRSS(username) {
+  const rssUrl = `https://letterboxd.com/${username}/rss/`;
+
+  const proxies = [
+    { url: `https://corsproxy.io/?${encodeURIComponent(rssUrl)}`, mode: 'text' },
+    { url: `https://api.allorigins.win/get?url=${encodeURIComponent(rssUrl)}`, mode: 'json' }
+  ];
+
+  for (const proxy of proxies) {
+    try {
+      const res = await fetch(proxy.url, { signal: AbortSignal.timeout(7000) });
+      if (!res.ok) continue;
+
+      const text = proxy.mode === 'json' ? (await res.json()).contents : await res.text();
+      if (!text || !text.includes('<letterboxd:filmTitle>')) continue;
+
+      const result = parseRSSXML(text);
+      if (result.matchCount > 0) return result;
+    } catch (_) {
+      // try next proxy
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Merges real RSS ratings on top of a deterministic fallback vector.
+ * Real ratings win; deterministic fills unrated films.
+ */
+function blendRatings(deterministicRatings, realRatings) {
+  return deterministicRatings.map((det, i) => realRatings[i] > 0 ? realRatings[i] : det);
+}
+
+/**
  * Binds active event listeners to elements.
  */
 function initEvents() {
   // --- SUBMIT USERNAME FORM ---
-  DOM.scanForm.addEventListener('submit', (e) => {
+  DOM.scanForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const rawVal = DOM.usernameInput.value.trim();
     if (!rawVal) return;
@@ -451,12 +545,47 @@ function initEvents() {
     STATE.username = rawVal;
     STATE.displayName = rawVal;
     STATE.avatar = rawVal.substring(0, 2).toUpperCase();
-    STATE.ratings = generateDeterministicRatings(rawVal); // seed rating vector
+    STATE.ratings = generateDeterministicRatings(rawVal); // deterministic fallback
+    STATE.hasRealData = false;
+    STATE.realDataMatchCount = 0;
 
-    // Play logs crawler
+    // Kick off real RSS fetch in parallel with the terminal animation
+    const rssFetchPromise = fetchLetterboxdRSS(rawVal);
+
     DOM.scanForm.querySelector('button[type="submit"]').classList.add('disabled');
-    renderTerminalLogs(rawVal, DOM.terminal, () => {
-      // Complete logs -> open Calibration
+
+    renderTerminalLogs(rawVal, DOM.terminal, async () => {
+      const body = DOM.terminal.querySelector('#terminal-output');
+
+      // Append a "waiting" line while the fetch finishes (usually already done)
+      const waitLine = document.createElement('p');
+      waitLine.className = 'terminal-line terminal-text terminal-accent-blue';
+      waitLine.innerHTML = '> [NET] Verifying live profile data...';
+      body.appendChild(waitLine);
+      body.scrollTop = body.scrollHeight;
+
+      const result = await rssFetchPromise;
+      waitLine.remove();
+
+      const statusLine = document.createElement('p');
+      statusLine.className = 'terminal-line terminal-text';
+
+      if (result && result.matchCount >= 1) {
+        STATE.ratings = blendRatings(STATE.ratings, result.ratings);
+        STATE.hasRealData = true;
+        STATE.realDataMatchCount = result.matchCount;
+        statusLine.classList.add('terminal-accent');
+        statusLine.innerHTML = `> [LIVE] ✓ Real Letterboxd data loaded — ${result.matchCount} catalog film${result.matchCount > 1 ? 's' : ''} matched from your RSS feed.`;
+      } else {
+        statusLine.innerHTML = '> [SIM] RSS returned no catalog matches — using deterministic taste vector estimation.';
+        statusLine.style.color = 'var(--accent-orange)';
+      }
+
+      body.appendChild(statusLine);
+      body.scrollTop = body.scrollHeight;
+
+      await new Promise(r => setTimeout(r, 900));
+
       renderCalibrationCards(STATE.ratings, DOM.calibrationContainer);
       transitionTo('screen-calibrate');
     });
@@ -598,14 +727,29 @@ function initEvents() {
   });
 
   // --- COMPARE FORM SUBMIT ---
-  document.getElementById('compare-form').addEventListener('submit', (e) => {
+  document.getElementById('compare-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const userA = document.getElementById('compare-user-a').value.trim();
     const userB = document.getElementById('compare-user-b').value.trim();
     if (!userA || !userB) return;
 
-    const ratingsA = generateDeterministicRatings(userA);
-    const ratingsB = generateDeterministicRatings(userB);
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    submitBtn.classList.add('disabled');
+    submitBtn.querySelector('span').textContent = 'Fetching profiles…';
+
+    // Fetch real RSS for both users in parallel, fall back to deterministic
+    const [rssA, rssB] = await Promise.all([
+      fetchLetterboxdRSS(userA),
+      fetchLetterboxdRSS(userB)
+    ]);
+
+    const baseA = generateDeterministicRatings(userA);
+    const baseB = generateDeterministicRatings(userB);
+    const ratingsA = rssA ? blendRatings(baseA, rssA.ratings) : baseA;
+    const ratingsB = rssB ? blendRatings(baseB, rssB.ratings) : baseB;
+
+    submitBtn.classList.remove('disabled');
+    submitBtn.querySelector('span').textContent = 'Reveal Compatibility';
 
     const cosine = getAdjustedCosineSimilarity(ratingsA, ratingsB);
     const pearson = getPearsonCorrelation(ratingsA, ratingsB);
